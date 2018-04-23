@@ -33,6 +33,7 @@ type Function struct {
 	Variadic   int
 	ReturnType ValueType
 	Call       func(ev *evaluator, args Expressions) Value
+	ExtRange   bool
 }
 
 // === time() float64 ===
@@ -128,10 +129,7 @@ func extrapolatedRate(ev *evaluator, arg Expr, isCounter bool, isRate bool) Valu
 
 func extendedRate(ev *evaluator, arg Expr, isCounter bool, isRate bool) Value {
 	ms := arg.(*MatrixSelector)
-	// XXX: Hack for including at least one non-stale point before the beginning of the range.
-	ms.Range += LookbackDelta
 	matrix := ev.evalMatrix(ms)
-	ms.Range -= LookbackDelta
 
 	var (
 		rangeStart   = ev.Timestamp - durationMilliseconds(ms.Range+ms.Offset)
@@ -141,26 +139,21 @@ func extendedRate(ev *evaluator, arg Expr, isCounter bool, isRate bool) Value {
 
 	for _, samples := range matrix {
 		points := samples.Points
-		// Skip all points before rangeStart except the last.
-		firstPoint := 0
-		for i := 0; i < len(points) && points[i].T <= rangeStart; i++ {
-			firstPoint = i
-		}
-
-		if len(points)-firstPoint < 2 {
+		if len(points) < 2 {
 			continue
 		}
-		sampledRange := float64(points[len(points)-1].T - points[firstPoint].T)
-		averageInterval := sampledRange / float64(len(points)-1-firstPoint)
+		sampledRange := float64(points[len(points)-1].T - points[0].T)
+		averageInterval := sampledRange / float64(len(points)-1)
 
+		firstPoint := 0
 		// If the point before the range is too far from rangeStart, drop it.
-		if float64(rangeStart-points[firstPoint].T) > averageInterval {
-			firstPoint++
-			if len(points)-firstPoint < 2 {
+		if float64(rangeStart-points[0].T) > averageInterval {
+			if len(points) < 3 {
 				continue
 			}
-			sampledRange = float64(points[len(points)-1].T - points[firstPoint].T)
-			averageInterval = sampledRange / float64(len(points)-1-firstPoint)
+			firstPoint = 1
+			sampledRange = float64(points[len(points)-1].T - points[1].T)
+			averageInterval = sampledRange / float64(len(points)-2)
 		}
 
 		var (
@@ -1328,18 +1321,21 @@ var functions = map[string]*Function{
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
 		Call:       funcXdelta,
+		ExtRange:   true,
 	},
 	"xincrease": {
 		Name:       "xincrease",
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
 		Call:       funcXincrease,
+		ExtRange:   true,
 	},
 	"xrate": {
 		Name:       "xrate",
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
 		Call:       funcXrate,
+		ExtRange:   true,
 	},
 	"year": {
 		Name:       "year",
