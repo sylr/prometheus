@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/prometheus/prometheus/pkg/labels"
@@ -80,7 +81,7 @@ var (
 	})
 	lastDuration = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "rule_group_last_duration_seconds"),
-		"The duration of the last rule group evaulation.",
+		"The duration of the last rule group evaluation.",
 		[]string{"rule_group"},
 		nil,
 	)
@@ -324,7 +325,10 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 		}
 
 		func(i int, rule Rule) {
+			sp, ctx := opentracing.StartSpanFromContext(ctx, "rule")
+			sp.SetTag("name", rule.Name())
 			defer func(t time.Time) {
+				sp.Finish()
 				evalDuration.Observe(time.Since(t).Seconds())
 				rule.SetEvaluationTime(time.Since(t))
 			}(time.Now())

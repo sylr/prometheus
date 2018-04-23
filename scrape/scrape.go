@@ -148,7 +148,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app Appendable, logger log.Logger) 
 		level.Error(logger).Log("msg", "Error creating HTTP client", "err", err)
 	}
 
-	buffers := pool.New(163, 100e6, 3, func(sz int) interface{} { return make([]byte, 0, sz) })
+	buffers := pool.New(1e3, 100e6, 3, func(sz int) interface{} { return make([]byte, 0, sz) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sp := &scrapePool{
@@ -245,8 +245,8 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) {
 }
 
 // Sync converts target groups into actual scrape targets and synchronizes
-// the currently running scraper with the resulting set.
-func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
+// the currently running scraper with the resulting set and returns all scraped and dropped targets.
+func (sp *scrapePool) Sync(tgs []*targetgroup.Group) (tActive []*Target, tDropped []*Target) {
 	start := time.Now()
 
 	var all []*Target
@@ -273,6 +273,15 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 		time.Since(start).Seconds(),
 	)
 	targetScrapePoolSyncsCounter.WithLabelValues(sp.config.JobName).Inc()
+
+	sp.mtx.RLock()
+	for _, t := range sp.targets {
+		tActive = append(tActive, t)
+	}
+	tDropped = sp.droppedTargets
+	sp.mtx.RUnlock()
+
+	return tActive, tDropped
 }
 
 // sync takes a list of potentially duplicated targets, deduplicates them, starts
