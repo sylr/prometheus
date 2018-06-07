@@ -33,6 +33,7 @@ type Function struct {
 	ArgTypes   []ValueType
 	Variadic   int
 	ReturnType ValueType
+	ExtRange   bool
 
 	// vals is a list of the evaluated arguments for the function call.
 	//    For range vectors it will be a Matrix with one series, instant vectors a
@@ -138,6 +139,71 @@ func extrapolatedRate(vals []Value, args Expressions, enh *EvalNodeHelper, isCou
 	return enh.out
 }
 
+func extendedRate(vals []Value, args Expressions, enh *EvalNodeHelper, isCounter bool, isRate bool) Vector {
+	ms := args[0].(*MatrixSelector)
+	matrix := vals[0].(Matrix)
+
+	var (
+		rangeStart = enh.ts - durationMilliseconds(ms.Range+ms.Offset)
+		rangeEnd   = enh.ts - durationMilliseconds(ms.Offset)
+	)
+
+	for _, samples := range matrix {
+		points := samples.Points
+		if len(points) < 2 {
+			continue
+		}
+		sampledRange := float64(points[len(points)-1].T - points[0].T)
+		averageInterval := sampledRange / float64(len(points)-1)
+
+		firstPoint := 0
+		// If the point before the range is too far from rangeStart, drop it.
+		if float64(rangeStart-points[0].T) > averageInterval {
+			if len(points) < 3 {
+				continue
+			}
+			firstPoint = 1
+			sampledRange = float64(points[len(points)-1].T - points[1].T)
+			averageInterval = sampledRange / float64(len(points)-2)
+		}
+
+		var (
+			counterCorrection float64
+			lastValue         float64
+		)
+		if isCounter {
+			for i := firstPoint; i < len(points); i++ {
+				sample := points[i]
+				if sample.V < lastValue {
+					counterCorrection += lastValue
+				}
+				lastValue = sample.V
+			}
+		}
+		resultValue := points[len(points)-1].V - points[firstPoint].V + counterCorrection
+
+		// Duration between last sample and boundary of range.
+		durationToEnd := float64(rangeEnd - points[len(points)-1].T)
+
+		// If the points cover the whole range (i.e. they start just before the
+		// range start and end just before the range end) adjust the value from
+		// the sampled range to the requested range.
+		if points[firstPoint].T <= rangeStart && durationToEnd < averageInterval {
+			adjustToRange := float64(durationMilliseconds(ms.Range))
+			resultValue = resultValue * (adjustToRange / sampledRange)
+		}
+
+		if isRate {
+			resultValue = resultValue / ms.Range.Seconds()
+		}
+
+		enh.out = append(enh.out, Sample{
+			Point: Point{V: resultValue},
+		})
+	}
+	return enh.out
+}
+
 // === delta(Matrix ValueTypeMatrix) Vector ===
 func funcDelta(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	return extrapolatedRate(vals, args, enh, false, false)
@@ -151,6 +217,21 @@ func funcRate(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 // === increase(node ValueTypeMatrix) Vector ===
 func funcIncrease(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	return extrapolatedRate(vals, args, enh, true, false)
+}
+
+// === xdelta(Matrix ValueTypeMatrix) Vector ===
+func funcXdelta(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
+	return extendedRate(vals, args, enh, false, false)
+}
+
+// === xrate(node ValueTypeMatrix) Vector ===
+func funcXrate(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
+	return extendedRate(vals, args, enh, true, true)
+}
+
+// === xincrease(node ValueTypeMatrix) Vector ===
+func funcXincrease(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
+	return extendedRate(vals, args, enh, true, false)
 }
 
 // === irate(node ValueTypeMatrix) Vector ===
@@ -299,7 +380,7 @@ func funcClampMax(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	for _, el := range vec {
 		enh.out = append(enh.out, Sample{
 			Metric: enh.dropMetricName(el.Metric),
-			Point:  Point{V: math.Min(max, float64(el.V))},
+			Point:  Point{V: math.Min(max, el.V)},
 		})
 	}
 	return enh.out
@@ -312,7 +393,7 @@ func funcClampMin(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	for _, el := range vec {
 		enh.out = append(enh.out, Sample{
 			Metric: enh.dropMetricName(el.Metric),
-			Point:  Point{V: math.Max(min, float64(el.V))},
+			Point:  Point{V: math.Max(min, el.V)},
 		})
 	}
 	return enh.out
@@ -331,7 +412,7 @@ func funcRound(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	toNearestInverse := 1.0 / toNearest
 
 	for _, el := range vec {
-		v := math.Floor(float64(el.V)*toNearestInverse+0.5) / toNearestInverse
+		v := math.Floor(el.V*toNearestInverse+0.5) / toNearestInverse
 		enh.out = append(enh.out, Sample{
 			Metric: enh.dropMetricName(el.Metric),
 			Point:  Point{V: v},
@@ -392,7 +473,7 @@ func funcMaxOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vector
 	return aggrOverTime(vals, enh, func(values []Point) float64 {
 		max := math.Inf(-1)
 		for _, v := range values {
-			max = math.Max(max, float64(v.V))
+			max = math.Max(max, v.V)
 		}
 		return max
 	})
@@ -403,7 +484,7 @@ func funcMinOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vector
 	return aggrOverTime(vals, enh, func(values []Point) float64 {
 		min := math.Inf(1)
 		for _, v := range values {
-			min = math.Min(min, float64(v.V))
+			min = math.Min(min, v.V)
 		}
 		return min
 	})
@@ -451,7 +532,7 @@ func funcStddevOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vec
 			count++
 		}
 		avg := sum / count
-		return math.Sqrt(float64(squaredSum/count - avg*avg))
+		return math.Sqrt(squaredSum/count - avg*avg)
 	})
 }
 
@@ -698,7 +779,7 @@ func funcChanges(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 		prev := samples.Points[0].V
 		for _, sample := range samples.Points[1:] {
 			current := sample.V
-			if current != prev && !(math.IsNaN(float64(current)) && math.IsNaN(float64(prev))) {
+			if current != prev && !(math.IsNaN(current) && math.IsNaN(prev)) {
 				changes++
 			}
 			prev = current
@@ -727,7 +808,7 @@ func funcLabelReplace(vals []Value, args Expressions, enh *EvalNodeHelper) Vecto
 		if err != nil {
 			panic(fmt.Errorf("invalid regular expression in label_replace(): %s", regexStr))
 		}
-		if !model.LabelNameRE.MatchString(string(dst)) {
+		if !model.LabelNameRE.MatchString(dst) {
 			panic(fmt.Errorf("invalid destination label name in label_replace(): %s", dst))
 		}
 		enh.dmn = make(map[uint64]labels.Labels, len(enh.out))
@@ -1195,6 +1276,27 @@ var functions = map[string]*Function{
 		ReturnType: ValueTypeVector,
 		Call:       funcVector,
 	},
+	"xdelta": {
+		Name:       "xdelta",
+		ArgTypes:   []ValueType{ValueTypeMatrix},
+		ReturnType: ValueTypeVector,
+		Call:       funcXdelta,
+		ExtRange:   true,
+	},
+	"xincrease": {
+		Name:       "xincrease",
+		ArgTypes:   []ValueType{ValueTypeMatrix},
+		ReturnType: ValueTypeVector,
+		Call:       funcXincrease,
+		ExtRange:   true,
+	},
+	"xrate": {
+		Name:       "xrate",
+		ArgTypes:   []ValueType{ValueTypeMatrix},
+		ReturnType: ValueTypeVector,
+		Call:       funcXrate,
+		ExtRange:   true,
+	},
 	"year": {
 		Name:       "year",
 		ArgTypes:   []ValueType{ValueTypeVector},
@@ -1217,7 +1319,7 @@ func (s vectorByValueHeap) Len() int {
 }
 
 func (s vectorByValueHeap) Less(i, j int) bool {
-	if math.IsNaN(float64(s[i].V)) {
+	if math.IsNaN(s[i].V) {
 		return true
 	}
 	return s[i].V < s[j].V
@@ -1246,7 +1348,7 @@ func (s vectorByReverseValueHeap) Len() int {
 }
 
 func (s vectorByReverseValueHeap) Less(i, j int) bool {
-	if math.IsNaN(float64(s[i].V)) {
+	if math.IsNaN(s[i].V) {
 		return true
 	}
 	return s[i].V > s[j].V

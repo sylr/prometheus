@@ -451,22 +451,30 @@ func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *EvalStmt) (
 
 func (ng *Engine) populateSeries(ctx context.Context, q storage.Queryable, s *EvalStmt) (storage.Querier, error) {
 	var maxOffset time.Duration
-	Inspect(s.Expr, func(node Node, _ []Node) bool {
+
+	Inspect(s.Expr, func(node Node, path []Node) bool {
+		var nodeOffset time.Duration
 		switch n := node.(type) {
 		case *VectorSelector:
-			if maxOffset < LookbackDelta {
-				maxOffset = LookbackDelta
-			}
-			if n.Offset+LookbackDelta > maxOffset {
-				maxOffset = n.Offset + LookbackDelta
+			nodeOffset += LookbackDelta
+			if n.Offset > 0 {
+				nodeOffset += n.Offset
 			}
 		case *MatrixSelector:
-			if maxOffset < n.Range {
-				maxOffset = n.Range
+			nodeOffset += n.Range
+			if n.Offset > 0 {
+				nodeOffset += n.Offset
 			}
-			if n.Offset+n.Range > maxOffset {
-				maxOffset = n.Offset + n.Range
+			// Include an extra LookbackDelta iff this is the argument to an
+			// extended range function. Extended ranges include one extra
+			// point, this is how far back we need to look for it.
+			f, ok := getFunction(extractFuncFromPath(path))
+			if ok && f.ExtRange {
+				nodeOffset += LookbackDelta
 			}
+		}
+		if maxOffset < nodeOffset {
+			maxOffset = nodeOffset
 		}
 		return true
 	})
@@ -810,6 +818,13 @@ func (ev *evaluator) eval(expr Expr) Value {
 		mat := make(Matrix, 0, len(sel.series)) // Output matrix.
 		offset := durationMilliseconds(sel.Offset)
 		selRange := durationMilliseconds(sel.Range)
+		bufferRange := selRange
+		// Include an extra LookbackDelta iff this is an extended
+		// range function. Extended ranges include one extra point,
+		// this is how far back we need to look for it.
+		if e.Func.ExtRange {
+			bufferRange += durationMilliseconds(LookbackDelta)
+		}
 		// Reuse objects across steps to save memory allocations.
 		points := getPointSlice(16)
 		inMatrix := make(Matrix, 1)
@@ -819,7 +834,7 @@ func (ev *evaluator) eval(expr Expr) Value {
 		var it *storage.BufferedSeriesIterator
 		for i, s := range sel.series {
 			if it == nil {
-				it = storage.NewBuffer(s.Iterator(), selRange)
+				it = storage.NewBuffer(s.Iterator(), bufferRange)
 			} else {
 				it.Reset(s.Iterator())
 			}
@@ -844,7 +859,7 @@ func (ev *evaluator) eval(expr Expr) Value {
 				maxt := ts - offset
 				mint := maxt - selRange
 				// Evaluate the matrix selector for this series for this step.
-				points = ev.matrixIterSlice(it, mint, maxt, points[:0])
+				points = ev.matrixIterSlice(it, mint, maxt, e.Func.ExtRange, points[:0])
 				if len(points) == 0 {
 					continue
 				}
@@ -1048,7 +1063,7 @@ func (ev *evaluator) matrixSelector(node *MatrixSelector) Matrix {
 			Metric: node.series[i].Labels(),
 		}
 
-		ss.Points = ev.matrixIterSlice(it, mint, maxt, getPointSlice(16))
+		ss.Points = ev.matrixIterSlice(it, mint, maxt, false, getPointSlice(16))
 
 		if len(ss.Points) > 0 {
 			matrix = append(matrix, ss)
@@ -1058,7 +1073,7 @@ func (ev *evaluator) matrixSelector(node *MatrixSelector) Matrix {
 }
 
 // matrixIterSlice evaluates a matrix vector for the iterator of one time series.
-func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, maxt int64, out []Point) []Point {
+func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, maxt int64, extRange bool, out []Point) []Point {
 	ok := it.Seek(maxt)
 	if !ok {
 		if it.Err() != nil {
@@ -1067,14 +1082,27 @@ func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, m
 	}
 
 	buf := it.Buffer()
+	appendedPointBeforeMint := false
 	for buf.Next() {
 		t, v := buf.At()
 		if value.IsStaleNaN(v) {
 			continue
 		}
-		// Values in the buffer are guaranteed to be smaller than maxt.
-		if t >= mint {
-			out = append(out, Point{T: t, V: v})
+		if !extRange {
+			// Values in the buffer are guaranteed to be smaller than maxt.
+			if t >= mint {
+				out = append(out, Point{T: t, V: v})
+			}
+		} else {
+			// This is the argument to an extended range function: if any point
+			// exists at or before range start, add it and then keep replacing
+			// it with later points while not yet (strictly) inside the range.
+			if t > mint || !appendedPointBeforeMint {
+				out = append(out, Point{T: t, V: v})
+				appendedPointBeforeMint = true
+			} else {
+				out[len(out)-1] = Point{T: t, V: v}
+			}
 		}
 	}
 	// The seeked sample might also be in the range.
@@ -1393,9 +1421,9 @@ func scalarBinop(op ItemType, lhs, rhs float64) float64 {
 	case itemDIV:
 		return lhs / rhs
 	case itemPOW:
-		return math.Pow(float64(lhs), float64(rhs))
+		return math.Pow(lhs, rhs)
 	case itemMOD:
-		return math.Mod(float64(lhs), float64(rhs))
+		return math.Mod(lhs, rhs)
 	case itemEQL:
 		return btos(lhs == rhs)
 	case itemNEQ:
@@ -1424,9 +1452,9 @@ func vectorElemBinop(op ItemType, lhs, rhs float64) (float64, bool) {
 	case itemDIV:
 		return lhs / rhs, true
 	case itemPOW:
-		return math.Pow(float64(lhs), float64(rhs)), true
+		return math.Pow(lhs, rhs), true
 	case itemMOD:
-		return math.Mod(float64(lhs), float64(rhs)), true
+		return math.Mod(lhs, rhs), true
 	case itemEQL:
 		return lhs, lhs == rhs
 	case itemNEQ:
@@ -1502,7 +1530,7 @@ func (ev *evaluator) aggregation(op ItemType, grouping []string, without bool, p
 			lb.Del(labels.MetricName)
 		}
 		if op == itemCountValues {
-			lb.Set(valueLabel, strconv.FormatFloat(float64(s.V), 'f', -1, 64))
+			lb.Set(valueLabel, strconv.FormatFloat(s.V, 'f', -1, 64))
 		}
 
 		var (
@@ -1570,12 +1598,12 @@ func (ev *evaluator) aggregation(op ItemType, grouping []string, without bool, p
 			group.groupCount++
 
 		case itemMax:
-			if group.value < s.V || math.IsNaN(float64(group.value)) {
+			if group.value < s.V || math.IsNaN(group.value) {
 				group.value = s.V
 			}
 
 		case itemMin:
-			if group.value > s.V || math.IsNaN(float64(group.value)) {
+			if group.value > s.V || math.IsNaN(group.value) {
 				group.value = s.V
 			}
 
@@ -1588,7 +1616,7 @@ func (ev *evaluator) aggregation(op ItemType, grouping []string, without bool, p
 			group.groupCount++
 
 		case itemTopK:
-			if int64(len(group.heap)) < k || group.heap[0].V < s.V || math.IsNaN(float64(group.heap[0].V)) {
+			if int64(len(group.heap)) < k || group.heap[0].V < s.V || math.IsNaN(group.heap[0].V) {
 				if int64(len(group.heap)) == k {
 					heap.Pop(&group.heap)
 				}
@@ -1599,7 +1627,7 @@ func (ev *evaluator) aggregation(op ItemType, grouping []string, without bool, p
 			}
 
 		case itemBottomK:
-			if int64(len(group.reverseHeap)) < k || group.reverseHeap[0].V > s.V || math.IsNaN(float64(group.reverseHeap[0].V)) {
+			if int64(len(group.reverseHeap)) < k || group.reverseHeap[0].V > s.V || math.IsNaN(group.reverseHeap[0].V) {
 				if int64(len(group.reverseHeap)) == k {
 					heap.Pop(&group.reverseHeap)
 				}
@@ -1627,12 +1655,12 @@ func (ev *evaluator) aggregation(op ItemType, grouping []string, without bool, p
 			aggr.value = float64(aggr.groupCount)
 
 		case itemStdvar:
-			avg := float64(aggr.value) / float64(aggr.groupCount)
-			aggr.value = float64(aggr.valuesSquaredSum)/float64(aggr.groupCount) - avg*avg
+			avg := aggr.value / float64(aggr.groupCount)
+			aggr.value = aggr.valuesSquaredSum/float64(aggr.groupCount) - avg*avg
 
 		case itemStddev:
-			avg := float64(aggr.value) / float64(aggr.groupCount)
-			aggr.value = math.Sqrt(float64(aggr.valuesSquaredSum)/float64(aggr.groupCount) - avg*avg)
+			avg := aggr.value / float64(aggr.groupCount)
+			aggr.value = math.Sqrt(aggr.valuesSquaredSum/float64(aggr.groupCount) - avg*avg)
 
 		case itemTopK:
 			// The heap keeps the lowest value on top, so reverse it.
