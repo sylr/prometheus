@@ -133,8 +133,7 @@ type MatrixSelector struct {
 	LabelMatchers []*labels.Matcher
 
 	// The series are populated at query preparation time.
-	series   []storage.Series
-	extRange bool
+	series []storage.Series
 }
 
 // NumberLiteral represents a number.

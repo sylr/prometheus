@@ -470,8 +470,6 @@ func (ng *Engine) populateSeries(ctx context.Context, q storage.Queryable, s *Ev
 			// point, this is how far back we need to look for it.
 			f, ok := getFunction(extractFuncFromPath(path))
 			if ok && f.ExtRange {
-				// Also mark the MatrixSelector object as extended range.
-				n.extRange = true
 				nodeOffset += LookbackDelta
 			}
 		}
@@ -1065,7 +1063,7 @@ func (ev *evaluator) matrixSelector(node *MatrixSelector) Matrix {
 			Metric: node.series[i].Labels(),
 		}
 
-		ss.Points = ev.matrixIterSlice(it, mint, maxt, node.extRange, getPointSlice(16))
+		ss.Points = ev.matrixIterSlice(it, mint, maxt, false, getPointSlice(16))
 
 		if len(ss.Points) > 0 {
 			matrix = append(matrix, ss)
