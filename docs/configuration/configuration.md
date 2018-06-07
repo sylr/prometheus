@@ -144,9 +144,11 @@ params:
 
 # Sets the `Authorization` header on every scrape request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <secret> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every scrape request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -577,6 +579,7 @@ address with relabeling.
 The following meta labels are available on targets during [relabeling](#relabel_config):
 
 * `__meta_gce_instance_name`: the name of the instance
+* `__meta_gce_label_<name>`: each GCE label of the instance
 * `__meta_gce_machine_type`: full or partial URL of the machine type of the instance
 * `__meta_gce_metadata_<name>`: each metadata item of the instance
 * `__meta_gce_network`: the network URL of the instance
@@ -691,6 +694,8 @@ Available meta labels:
 * `__meta_kubernetes_pod_node_name`: The name of the node the pod is scheduled onto.
 * `__meta_kubernetes_pod_host_ip`: The current host IP of the pod object.
 * `__meta_kubernetes_pod_uid`: The UID of the pod object.
+* `__meta_kubernetes_pod_controller_kind`: Object kind of the pod controller.
+* `__meta_kubernetes_pod_controller_name`: Name of the pod controller.
 
 #### `endpoints`
 
@@ -744,11 +749,13 @@ role: <role>
 # Optional authentication information used to authenticate to the API server.
 # Note that `basic_auth`, `bearer_token` and `bearer_token_file` options are
 # mutually exclusive.
+# password and password_file are mutually exclusive.
 
 # Optional HTTP basic authentication information.
 basic_auth:
   [ username: <string> ]
   [ password: <secret> ]
+  [ password_file: <string> ]
 
 # Optional bearer token authentication information.
 [ bearer_token: <secret> ]
@@ -816,9 +823,11 @@ servers:
 # Sets the `Authorization` header on every request with the
 # configured username and password.
 # This is mutually exclusive with other authentication mechanisms.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file` and other authentication mechanisms.
@@ -1071,9 +1080,11 @@ through the `__alerts_path__` label.
 
 # Sets the `Authorization` header on every request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -1165,9 +1176,11 @@ write_relabel_configs:
 
 # Sets the `Authorization` header on every remote write request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every remote write request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -1183,6 +1196,24 @@ tls_config:
 
 # Optional proxy URL.
 [ proxy_url: <string> ]
+
+# Configures the queue used to write to remote storage.
+queue_config:
+  # Number of samples to buffer per shard before we start dropping them.
+  [ capacity: <int> | default = 100000 ]
+  # Maximum number of shards, i.e. amount of concurrency.
+  [ max_shards: <int> | default = 1000 ]
+  # Maximum number of samples per send.
+  [ max_samples_per_send: <int> | default = 100]
+  # Maximum time a sample will wait in buffer.
+  [ batch_send_deadline: <duration> | default = 5s ]
+  # Maximum number of times to retry a batch on recoverable errors.
+  [ max_retries: <int> | default = 10 ]
+  # Initial retry delay. Gets doubled for every retry.
+  [ min_backoff: <duration> | default = 30ms ]
+  # Maximum retry delay.
+  [ max_backoff: <duration> | default = 100ms ]
+
 ```
 
 There is a list of
@@ -1209,9 +1240,11 @@ required_matchers:
 
 # Sets the `Authorization` header on every remote read request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every remote read request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.

@@ -71,6 +71,17 @@ import (
 
 var localhostRepresentations = []string{"127.0.0.1", "localhost"}
 
+// secureHeadersMiddleware adds common HTTP security headers to responses.
+func secureHeadersMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("X-XSS-Protection", "1; mode=block")
+		w.Header().Add("X-Content-Type-Options", "nosniff")
+		w.Header().Add("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Add("Content-Security-Policy", "frame-ancestors 'self'")
+		h.ServeHTTP(w, r)
+	})
+}
+
 var (
 	requestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -478,8 +489,10 @@ func (h *Handler) Run(ctx context.Context) error {
 
 	errlog := stdlog.New(log.NewStdlibAdapter(level.Error(h.logger)), "", 0)
 
+	withSecureHeaders := nethttp.Middleware(opentracing.GlobalTracer(), secureHeadersMiddleware(mux), operationName)
+
 	httpSrv := &http.Server{
-		Handler:     nethttp.Middleware(opentracing.GlobalTracer(), mux, operationName),
+		Handler:     withSecureHeaders,
 		ErrorLog:    errlog,
 		ReadTimeout: h.options.ReadTimeout,
 	}
@@ -667,10 +680,34 @@ func (h *Handler) serviceDiscovery(w http.ResponseWriter, r *http.Request) {
 	scrapeConfigData := struct {
 		Index   []string
 		Targets map[string][]*scrape.Target
+		Active  []int
+		Dropped []int
+		Total   []int
 	}{
 		Index:   index,
-		Targets: targets,
+		Targets: make(map[string][]*scrape.Target),
+		Active:  make([]int, len(index)),
+		Dropped: make([]int, len(index)),
+		Total:   make([]int, len(index)),
 	}
+	for i, job := range scrapeConfigData.Index {
+		scrapeConfigData.Targets[job] = make([]*scrape.Target, 0, len(targets[job]))
+		scrapeConfigData.Total[i] = len(targets[job])
+		for _, target := range targets[job] {
+			// Do not display more than 100 dropped targets per job to avoid
+			// returning too much data to the clients.
+			if target.Labels().Len() == 0 {
+				scrapeConfigData.Dropped[i]++
+				if scrapeConfigData.Dropped[i] > 100 {
+					continue
+				}
+			} else {
+				scrapeConfigData.Active[i]++
+			}
+			scrapeConfigData.Targets[job] = append(scrapeConfigData.Targets[job], target)
+		}
+	}
+
 	h.executeTemplate(w, "service-discovery.html", scrapeConfigData)
 }
 
