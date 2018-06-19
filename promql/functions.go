@@ -1315,6 +1315,9 @@ func init() {
 		functions["delta"] = functions["xdelta"]
 		functions["increase"] = functions["xincrease"]
 		functions["rate"] = functions["xrate"]
+		functions["delta"].Name = "delta"
+		functions["increase"].Name = "increase"
+		functions["rate"].Name = "rate"
 		delete(functions, "xdelta")
 		delete(functions, "xincrease")
 		delete(functions, "xrate")
