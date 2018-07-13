@@ -176,17 +176,26 @@ func (s *Ingress) buildIngress(ingress *v1beta1.Ingress) *targetgroup.Group {
 	}
 	tg.Labels = ingressLabels(ingress)
 
-	schema := "http"
-	if ingress.Spec.TLS != nil {
-		schema = "https"
+	tlsHosts := make(map[string]struct{})
+	for _, tls := range ingress.Spec.TLS {
+		for _, host := range tls.Hosts {
+			tlsHosts[host] = struct{}{}
+		}
 	}
+
 	for _, rule := range ingress.Spec.Rules {
 		paths := pathsFromIngressRule(&rule.IngressRuleValue)
+
+		scheme := "http"
+		_, isTLS := tlsHosts[rule.Host]
+		if isTLS {
+			scheme = "https"
+		}
 
 		for _, path := range paths {
 			tg.Targets = append(tg.Targets, model.LabelSet{
 				model.AddressLabel: lv(rule.Host),
-				ingressSchemeLabel: lv(schema),
+				ingressSchemeLabel: lv(scheme),
 				ingressHostLabel:   lv(rule.Host),
 				ingressPathLabel:   lv(path),
 			})
