@@ -27,13 +27,12 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 
+	apiv1 "k8s.io/api/core/v1"
+	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api"
-	apiv1 "k8s.io/client-go/pkg/api/v1"
-	extensionsv1beta1 "k8s.io/client-go/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
@@ -161,7 +160,7 @@ type Discovery struct {
 func (d *Discovery) getNamespaces() []string {
 	namespaces := d.namespaceDiscovery.Names
 	if len(namespaces) == 0 {
-		namespaces = []string{api.NamespaceAll}
+		namespaces = []string{apiv1.NamespaceAll}
 	}
 	return namespaces
 }
@@ -371,6 +370,8 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	}
 
 	d.Unlock()
+
+	wg.Wait()
 	<-ctx.Done()
 }
 
@@ -382,7 +383,6 @@ func send(ctx context.Context, l log.Logger, role Role, ch chan<- []*targetgroup
 	if tg == nil {
 		return
 	}
-	level.Debug(l).Log("msg", "kubernetes discovery update", "role", string(role), "tg", fmt.Sprintf("%#v", tg))
 	select {
 	case <-ctx.Done():
 	case ch <- []*targetgroup.Group{tg}:
