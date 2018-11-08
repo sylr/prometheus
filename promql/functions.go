@@ -473,9 +473,11 @@ func funcCountOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vect
 // === max_over_time(Matrix ValueTypeMatrix) Vector ===
 func funcMaxOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	return aggrOverTime(vals, enh, func(values []Point) float64 {
-		max := math.Inf(-1)
+		max := values[0].V
 		for _, v := range values {
-			max = math.Max(max, v.V)
+			if v.V > max || math.IsNaN(max) {
+				max = v.V
+			}
 		}
 		return max
 	})
@@ -484,9 +486,11 @@ func funcMaxOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vector
 // === min_over_time(Matrix ValueTypeMatrix) Vector ===
 func funcMinOverTime(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 	return aggrOverTime(vals, enh, func(values []Point) float64 {
-		min := math.Inf(1)
+		min := values[0].V
 		for _, v := range values {
-			min = math.Min(min, v.V)
+			if v.V < min || math.IsNaN(min) {
+				min = v.V
+			}
 		}
 		return min
 	})
@@ -816,7 +820,6 @@ func funcLabelReplace(vals []Value, args Expressions, enh *EvalNodeHelper) Vecto
 		enh.dmn = make(map[uint64]labels.Labels, len(enh.out))
 	}
 
-	outSet := make(map[uint64]struct{}, len(vector))
 	for _, el := range vector {
 		h := el.Metric.Hash()
 		var outMetric labels.Labels
@@ -841,17 +844,10 @@ func funcLabelReplace(vals []Value, args Expressions, enh *EvalNodeHelper) Vecto
 			}
 		}
 
-		outHash := outMetric.Hash()
-		if _, ok := outSet[outHash]; ok {
-			panic(fmt.Errorf("duplicated label set in output of label_replace(): %s", el.Metric))
-		} else {
-			enh.out = append(enh.out,
-				Sample{
-					Metric: outMetric,
-					Point:  Point{V: el.Point.V},
-				})
-			outSet[outHash] = struct{}{}
-		}
+		enh.out = append(enh.out, Sample{
+			Metric: outMetric,
+			Point:  Point{V: el.Point.V},
+		})
 	}
 	return enh.out
 }
@@ -890,7 +886,6 @@ func funcLabelJoin(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 		panic(fmt.Errorf("invalid destination label name in label_join(): %s", dst))
 	}
 
-	outSet := make(map[uint64]struct{}, len(vector))
 	srcVals := make([]string, len(srcLabels))
 	for _, el := range vector {
 		h := el.Metric.Hash()
@@ -915,17 +910,11 @@ func funcLabelJoin(vals []Value, args Expressions, enh *EvalNodeHelper) Vector {
 			outMetric = lb.Labels()
 			enh.dmn[h] = outMetric
 		}
-		outHash := outMetric.Hash()
 
-		if _, exists := outSet[outHash]; exists {
-			panic(fmt.Errorf("duplicated label set in output of label_join(): %s", el.Metric))
-		} else {
-			enh.out = append(enh.out, Sample{
-				Metric: outMetric,
-				Point:  Point{V: el.Point.V},
-			})
-			outSet[outHash] = struct{}{}
-		}
+		enh.out = append(enh.out, Sample{
+			Metric: outMetric,
+			Point:  Point{V: el.Point.V},
+		})
 	}
 	return enh.out
 }

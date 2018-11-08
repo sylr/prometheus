@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/go-kit/kit/log"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -30,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-kit/kit/log"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	config_util "github.com/prometheus/common/config"
@@ -38,6 +39,7 @@ import (
 	"github.com/prometheus/common/route"
 
 	"github.com/prometheus/prometheus/config"
+	"github.com/prometheus/prometheus/pkg/gate"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/prompb"
@@ -51,31 +53,48 @@ import (
 
 type testTargetRetriever struct{}
 
-func (t testTargetRetriever) TargetsActive() []*scrape.Target {
-	return []*scrape.Target{
-		scrape.NewTarget(
-			labels.FromMap(map[string]string{
-				model.SchemeLabel:      "http",
-				model.AddressLabel:     "example.com:8080",
-				model.MetricsPathLabel: "/metrics",
-			}),
-			nil,
-			url.Values{},
-		),
+func (t testTargetRetriever) TargetsActive() map[string][]*scrape.Target {
+	return map[string][]*scrape.Target{
+		"test": {
+			scrape.NewTarget(
+				labels.FromMap(map[string]string{
+					model.SchemeLabel:      "http",
+					model.AddressLabel:     "example.com:8080",
+					model.MetricsPathLabel: "/metrics",
+					model.JobLabel:         "test",
+				}),
+				nil,
+				url.Values{},
+			),
+		},
+		"blackbox": {
+			scrape.NewTarget(
+				labels.FromMap(map[string]string{
+					model.SchemeLabel:      "http",
+					model.AddressLabel:     "localhost:9115",
+					model.MetricsPathLabel: "/probe",
+					model.JobLabel:         "blackbox",
+				}),
+				nil,
+				url.Values{"target": []string{"example.com"}},
+			),
+		},
 	}
 }
-func (t testTargetRetriever) TargetsDropped() []*scrape.Target {
-	return []*scrape.Target{
-		scrape.NewTarget(
-			nil,
-			labels.FromMap(map[string]string{
-				model.AddressLabel:     "http://dropped.example.com:9115",
-				model.MetricsPathLabel: "/probe",
-				model.SchemeLabel:      "http",
-				model.JobLabel:         "blackbox",
-			}),
-			url.Values{},
-		),
+func (t testTargetRetriever) TargetsDropped() map[string][]*scrape.Target {
+	return map[string][]*scrape.Target{
+		"blackbox": {
+			scrape.NewTarget(
+				nil,
+				labels.FromMap(map[string]string{
+					model.AddressLabel:     "http://dropped.example.com:9115",
+					model.MetricsPathLabel: "/probe",
+					model.SchemeLabel:      "http",
+					model.JobLabel:         "blackbox",
+				}),
+				url.Values{},
+			),
+		},
 	}
 }
 
@@ -145,7 +164,15 @@ func (m rulesRetrieverMock) RuleGroups() []*rules.Group {
 	storage := testutil.NewStorage(m.testing)
 	defer storage.Close()
 
-	engine := promql.NewEngine(nil, nil, 10, 10*time.Second)
+	engineOpts := promql.EngineOpts{
+		Logger:        nil,
+		Reg:           nil,
+		MaxConcurrent: 10,
+		MaxSamples:    10,
+		Timeout:       100 * time.Second,
+	}
+
+	engine := promql.NewEngine(engineOpts)
 	opts := &rules.ManagerOptions{
 		QueryFunc:  rules.EngineQueryFunc(engine, storage),
 		Appendable: storage,
@@ -220,11 +247,11 @@ func TestEndpoints(t *testing.T) {
 			QueryEngine:           suite.QueryEngine(),
 			targetRetriever:       testTargetRetriever{},
 			alertmanagerRetriever: testAlertmanagerRetriever{},
-			now:            func() time.Time { return now },
-			config:         func() config.Config { return samplePrometheusCfg },
-			flagsMap:       sampleFlagMap,
-			ready:          func(f http.HandlerFunc) http.HandlerFunc { return f },
-			rulesRetriever: algr,
+			now:                   func() time.Time { return now },
+			config:                func() config.Config { return samplePrometheusCfg },
+			flagsMap:              sampleFlagMap,
+			ready:                 func(f http.HandlerFunc) http.HandlerFunc { return f },
+			rulesRetriever:        algr,
 		}
 
 		testEndpoints(t, api, true)
@@ -273,11 +300,11 @@ func TestEndpoints(t *testing.T) {
 			QueryEngine:           suite.QueryEngine(),
 			targetRetriever:       testTargetRetriever{},
 			alertmanagerRetriever: testAlertmanagerRetriever{},
-			now:            func() time.Time { return now },
-			config:         func() config.Config { return samplePrometheusCfg },
-			flagsMap:       sampleFlagMap,
-			ready:          func(f http.HandlerFunc) http.HandlerFunc { return f },
-			rulesRetriever: algr,
+			now:                   func() time.Time { return now },
+			config:                func() config.Config { return samplePrometheusCfg },
+			flagsMap:              sampleFlagMap,
+			ready:                 func(f http.HandlerFunc) http.HandlerFunc { return f },
+			rulesRetriever:        algr,
 		}
 
 		testEndpoints(t, api, false)
@@ -617,9 +644,19 @@ func testEndpoints(t *testing.T, api *API, testLabelAPI bool) {
 				ActiveTargets: []*Target{
 					{
 						DiscoveredLabels: map[string]string{},
-						Labels:           map[string]string{},
-						ScrapeURL:        "http://example.com:8080/metrics",
-						Health:           "unknown",
+						Labels: map[string]string{
+							"job": "blackbox",
+						},
+						ScrapeURL: "http://localhost:9115/probe?target=example.com",
+						Health:    "unknown",
+					},
+					{
+						DiscoveredLabels: map[string]string{},
+						Labels: map[string]string{
+							"job": "test",
+						},
+						ScrapeURL: "http://example.com:8080/metrics",
+						Health:    "unknown",
 					},
 				},
 				DroppedTargets: []*DroppedTarget{
@@ -833,7 +870,8 @@ func TestReadEndpoint(t *testing.T) {
 				},
 			}
 		},
-		remoteReadLimit: 1e6,
+		remoteReadSampleLimit: 1e6,
+		remoteReadGate:        gate.New(1),
 	}
 
 	// Encode the request.
@@ -897,7 +935,7 @@ func TestReadEndpoint(t *testing.T) {
 					{Name: "d", Value: "e"},
 					{Name: "foo", Value: "bar"},
 				},
-				Samples: []*prompb.Sample{{Value: 1, Timestamp: 0}},
+				Samples: []prompb.Sample{{Value: 1, Timestamp: 0}},
 			},
 		},
 	}

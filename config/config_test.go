@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/prometheus/discovery/file"
 	"github.com/prometheus/prometheus/discovery/kubernetes"
 	"github.com/prometheus/prometheus/discovery/marathon"
+	"github.com/prometheus/prometheus/discovery/openstack"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/discovery/triton"
 	"github.com/prometheus/prometheus/discovery/zookeeper"
@@ -538,6 +539,31 @@ var expectedConf = &Config{
 				},
 			},
 		},
+		{
+			JobName: "service-openstack",
+
+			ScrapeInterval: model.Duration(15 * time.Second),
+			ScrapeTimeout:  DefaultGlobalConfig.ScrapeTimeout,
+
+			MetricsPath: DefaultScrapeConfig.MetricsPath,
+			Scheme:      DefaultScrapeConfig.Scheme,
+
+			ServiceDiscoveryConfig: sd_config.ServiceDiscoveryConfig{
+				OpenstackSDConfigs: []*openstack.SDConfig{
+					{
+						Role:            "instance",
+						Region:          "RegionOne",
+						Port:            80,
+						RefreshInterval: model.Duration(60 * time.Second),
+						TLSConfig: config_util.TLSConfig{
+							CAFile:   "valid_ca_file",
+							CertFile: "valid_cert_file",
+							KeyFile:  "valid_key_file",
+						},
+					},
+				},
+			},
+		},
 	},
 	AlertingConfig: AlertingConfig{
 		AlertmanagerConfigs: []*AlertmanagerConfig{
@@ -695,6 +721,9 @@ var expectedErrors = []struct {
 	}, {
 		filename: "marathon_authtoken_bearertoken.bad.yml",
 		errMsg:   "marathon_sd: at most one of bearer_token, bearer_token_file, auth_token & auth_token_file must be configured",
+	}, {
+		filename: "openstack_role.bad.yml",
+		errMsg:   "unknown OpenStack SD role",
 	}, {
 		filename: "url_in_targetgroup.bad.yml",
 		errMsg:   "\"http://bad\" is not a valid hostname",
