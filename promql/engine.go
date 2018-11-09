@@ -546,6 +546,13 @@ func (ng *Engine) populateSeries(ctx context.Context, q storage.Queryable, s *Ev
 			// For all matrix queries we want to ensure that we have (end-start) + range selected
 			// this way we have `range` data before the start time
 			params.Start = params.Start - durationMilliseconds(n.Range)
+			// Include an extra LookbackDelta iff this is the argument to an
+			// extended range function. Extended ranges include one extra
+			// point, this is how far back we need to look for it.
+			f, ok := getFunction(params.Func)
+			if ok && f.ExtRange {
+				params.Start = params.Start - durationMilliseconds(LookbackDelta)
+			}
 			if n.Offset > 0 {
 				offsetMilliseconds := durationMilliseconds(n.Offset)
 				params.Start = params.Start - offsetMilliseconds
@@ -895,16 +902,17 @@ func (ev *evaluator) eval(expr Expr) Value {
 		mat := make(Matrix, 0, len(sel.series)) // Output matrix.
 		offset := durationMilliseconds(sel.Offset)
 		selRange := durationMilliseconds(sel.Range)
-		stepRange := selRange
-		if stepRange > ev.interval {
-			stepRange = ev.interval
-		}
 		bufferRange := selRange
+		stepRange := selRange
 		// Include an extra LookbackDelta iff this is an extended
 		// range function. Extended ranges include one extra point,
 		// this is how far back we need to look for it.
 		if e.Func.ExtRange {
 			bufferRange += durationMilliseconds(LookbackDelta)
+			stepRange += durationMilliseconds(LookbackDelta)
+		}
+		if stepRange > ev.interval {
+			stepRange = ev.interval
 		}
 		// Reuse objects across steps to save memory allocations.
 		points := getPointSlice(16)
@@ -1197,6 +1205,10 @@ func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, m
 			// Then, go back one sample if within LookbackDelta of mint.
 			if drop > 0 && out[drop-1].T >= extMint {
 				drop--
+			}
+			if out[len(out)-1].T >= mint {
+				// Only append points with timestamps after the last timestamp we have.
+				mint = out[len(out)-1].T + 1
 			}
 		}
 		copy(out, out[drop:])
