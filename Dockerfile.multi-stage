@@ -1,4 +1,4 @@
-FROM golang:1.10-alpine3.7 AS builder
+FROM golang:1.11-alpine3.8 AS builder
 
 ADD . /go/src/github.com/prometheus/prometheus
 WORKDIR /go/src/github.com/prometheus/prometheus
