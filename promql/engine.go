@@ -476,22 +476,30 @@ func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *EvalStmt) (
 
 func (ng *Engine) populateSeries(ctx context.Context, q storage.Queryable, s *EvalStmt) (storage.Querier, error) {
 	var maxOffset time.Duration
-	Inspect(s.Expr, func(node Node, _ []Node) error {
+
+	Inspect(s.Expr, func(node Node, path []Node) error {
+		var nodeOffset time.Duration
 		switch n := node.(type) {
 		case *VectorSelector:
-			if maxOffset < LookbackDelta {
-				maxOffset = LookbackDelta
-			}
-			if n.Offset+LookbackDelta > maxOffset {
-				maxOffset = n.Offset + LookbackDelta
+			nodeOffset += LookbackDelta
+			if n.Offset > 0 {
+				nodeOffset += n.Offset
 			}
 		case *MatrixSelector:
-			if maxOffset < n.Range {
-				maxOffset = n.Range
+			nodeOffset += n.Range
+			if n.Offset > 0 {
+				nodeOffset += n.Offset
 			}
-			if n.Offset+n.Range > maxOffset {
-				maxOffset = n.Offset + n.Range
+			// Include an extra LookbackDelta iff this is the argument to an
+			// extended range function. Extended ranges include one extra
+			// point, this is how far back we need to look for it.
+			f, ok := getFunction(extractFuncFromPath(path))
+			if ok && f.ExtRange {
+				nodeOffset += LookbackDelta
 			}
+		}
+		if maxOffset < nodeOffset {
+			maxOffset = nodeOffset
 		}
 		return nil
 	})
@@ -538,6 +546,13 @@ func (ng *Engine) populateSeries(ctx context.Context, q storage.Queryable, s *Ev
 			// For all matrix queries we want to ensure that we have (end-start) + range selected
 			// this way we have `range` data before the start time
 			params.Start = params.Start - durationMilliseconds(n.Range)
+			// Include an extra LookbackDelta iff this is the argument to an
+			// extended range function. Extended ranges include one extra
+			// point, this is how far back we need to look for it.
+			f, ok := getFunction(params.Func)
+			if ok && f.ExtRange {
+				params.Start = params.Start - durationMilliseconds(LookbackDelta)
+			}
 			if n.Offset > 0 {
 				offsetMilliseconds := durationMilliseconds(n.Offset)
 				params.Start = params.Start - offsetMilliseconds
@@ -887,7 +902,15 @@ func (ev *evaluator) eval(expr Expr) Value {
 		mat := make(Matrix, 0, len(sel.series)) // Output matrix.
 		offset := durationMilliseconds(sel.Offset)
 		selRange := durationMilliseconds(sel.Range)
+		bufferRange := selRange
 		stepRange := selRange
+		// Include an extra LookbackDelta iff this is an extended
+		// range function. Extended ranges include one extra point,
+		// this is how far back we need to look for it.
+		if e.Func.ExtRange {
+			bufferRange += durationMilliseconds(LookbackDelta)
+			stepRange += durationMilliseconds(LookbackDelta)
+		}
 		if stepRange > ev.interval {
 			stepRange = ev.interval
 		}
@@ -897,7 +920,7 @@ func (ev *evaluator) eval(expr Expr) Value {
 		inArgs[matrixArgIndex] = inMatrix
 		enh := &EvalNodeHelper{out: make(Vector, 0, 1)}
 		// Process all the calls for one time series at a time.
-		it := storage.NewBuffer(selRange)
+		it := storage.NewBuffer(bufferRange)
 		for i, s := range sel.series {
 			points = points[:0]
 			it.Reset(s.Iterator())
@@ -922,7 +945,7 @@ func (ev *evaluator) eval(expr Expr) Value {
 				maxt := ts - offset
 				mint := maxt - selRange
 				// Evaluate the matrix selector for this series for this step.
-				points = ev.matrixIterSlice(it, mint, maxt, points)
+				points = ev.matrixIterSlice(it, mint, maxt, e.Func.ExtRange, points)
 				if len(points) == 0 {
 					continue
 				}
@@ -1142,7 +1165,7 @@ func (ev *evaluator) matrixSelector(node *MatrixSelector) Matrix {
 			Metric: node.series[i].Labels(),
 		}
 
-		ss.Points = ev.matrixIterSlice(it, mint, maxt, getPointSlice(16))
+		ss.Points = ev.matrixIterSlice(it, mint, maxt, false, getPointSlice(16))
 
 		if len(ss.Points) > 0 {
 			matrix = append(matrix, ss)
@@ -1158,23 +1181,38 @@ func (ev *evaluator) matrixSelector(node *MatrixSelector) Matrix {
 //
 // As an optimization, the matrix vector may already contain points of the same
 // time series from the evaluation of an earlier step (with lower mint and maxt
-// values). Any such points falling before mint are discarded; points that fall
-// into the [mint, maxt] range are retained; only points with later timestamps
-// are populated from the iterator.
-func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, maxt int64, out []Point) []Point {
-	if len(out) > 0 && out[len(out)-1].T >= mint {
+// values). Any such points falling before mint (except the last, when extRange
+// is true) are discarded; points that fall into the [mint, maxt] range are
+// retained; only points with later timestamps are populated from the iterator.
+func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, maxt int64, extRange bool, out []Point) []Point {
+	extMint := mint - durationMilliseconds(LookbackDelta)
+	if len(out) > 0 && (out[len(out)-1].T >= mint || (extRange && out[len(out)-1].T >= extMint)) {
 		// There is an overlap between previous and current ranges, retain common
 		// points. In most such cases:
 		//   (a) the overlap is significantly larger than the eval step; and/or
 		//   (b) the number of samples is relatively small.
 		// so a linear search will be as fast as a binary search.
 		var drop int
-		for drop = 0; out[drop].T < mint; drop++ {
+		if !extRange {
+			for drop = 0; out[drop].T < mint; drop++ {
+			}
+			// Only append points with timestamps after the last timestamp we have.
+			mint = out[len(out)-1].T + 1
+		} else {
+			// This is an argument to an extended range function, first go past mint.
+			for drop = 0; drop < len(out) && out[drop].T <= mint; drop++ {
+			}
+			// Then, go back one sample if within LookbackDelta of mint.
+			if drop > 0 && out[drop-1].T >= extMint {
+				drop--
+			}
+			if out[len(out)-1].T >= mint {
+				// Only append points with timestamps after the last timestamp we have.
+				mint = out[len(out)-1].T + 1
+			}
 		}
 		copy(out, out[drop:])
 		out = out[:len(out)-drop]
-		// Only append points with timestamps after the last timestamp we have.
-		mint = out[len(out)-1].T + 1
 	} else {
 		out = out[:0]
 	}
@@ -1187,18 +1225,35 @@ func (ev *evaluator) matrixIterSlice(it *storage.BufferedSeriesIterator, mint, m
 	}
 
 	buf := it.Buffer()
+	appendedPointBeforeMint := len(out) > 0
 	for buf.Next() {
 		t, v := buf.At()
 		if value.IsStaleNaN(v) {
 			continue
 		}
-		// Values in the buffer are guaranteed to be smaller than maxt.
-		if t >= mint {
-			if ev.currentSamples >= ev.maxSamples {
-				ev.error(ErrTooManySamples(env))
+		if !extRange {
+			// Values in the buffer are guaranteed to be smaller than maxt.
+			if t >= mint {
+				if ev.currentSamples >= ev.maxSamples {
+					ev.error(ErrTooManySamples(env))
+				}
+				out = append(out, Point{T: t, V: v})
+				ev.currentSamples++
 			}
-			out = append(out, Point{T: t, V: v})
-			ev.currentSamples++
+		} else {
+			// This is the argument to an extended range function: if any point
+			// exists at or before range start, add it and then keep replacing
+			// it with later points while not yet (strictly) inside the range.
+			if t > mint || !appendedPointBeforeMint {
+				if ev.currentSamples >= ev.maxSamples {
+					ev.error(ErrTooManySamples(env))
+				}
+				out = append(out, Point{T: t, V: v})
+				ev.currentSamples++
+				appendedPointBeforeMint = true
+			} else {
+				out[len(out)-1] = Point{T: t, V: v}
+			}
 		}
 	}
 	// The seeked sample might also be in the range.
