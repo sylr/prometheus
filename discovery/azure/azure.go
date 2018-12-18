@@ -80,6 +80,13 @@ type SDConfig struct {
 	RefreshInterval model.Duration     `yaml:"refresh_interval,omitempty"`
 }
 
+func validateAuthParam(param, name string) error {
+	if len(param) == 0 {
+		return fmt.Errorf("Azure SD configuration requires a %s", name)
+	}
+	return nil
+}
+
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
 func (c *SDConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	*c = DefaultSDConfig
@@ -88,8 +95,17 @@ func (c *SDConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if err != nil {
 		return err
 	}
-	if c.SubscriptionID == "" {
-		return fmt.Errorf("Azure SD configuration requires a subscription_id")
+	if err = validateAuthParam(c.SubscriptionID, "subscription_id"); err != nil {
+		return err
+	}
+	if err = validateAuthParam(c.TenantID, "tenant_id"); err != nil {
+		return err
+	}
+	if err = validateAuthParam(c.ClientID, "client_id"); err != nil {
+		return err
+	}
+	if err = validateAuthParam(string(c.ClientSecret), "client_secret"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -218,7 +234,7 @@ type virtualMachine struct {
 func newAzureResourceFromID(id string, logger log.Logger) (azureResource, error) {
 	// Resource IDs have the following format.
 	// /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/PROVIDER/TYPE/NAME
-	// or if embeded resource then
+	// or if embedded resource then
 	// /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/PROVIDER/TYPE/NAME/TYPE/NAME
 	s := strings.Split(id, "/")
 	if len(s) != 9 && len(s) != 11 {
@@ -313,6 +329,10 @@ func (d *Discovery) refresh() (tg *targetgroup.Group, err error) {
 					ch <- target{labelSet: nil, err: err}
 					// Get out of this routine because we cannot continue without a network interface.
 					return
+				}
+
+				if networkInterface.Properties == nil {
+					continue
 				}
 
 				// Unfortunately Azure does not return information on whether a VM is deallocated.

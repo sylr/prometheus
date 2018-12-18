@@ -169,10 +169,11 @@ type errQuerier struct {
 	err error
 }
 
-func (q *errQuerier) Select(*storage.SelectParams, ...*labels.Matcher) (storage.SeriesSet, error) {
-	return errSeriesSet{err: q.err}, q.err
+func (q *errQuerier) Select(*storage.SelectParams, ...*labels.Matcher) (storage.SeriesSet, error, storage.Warnings) {
+	return errSeriesSet{err: q.err}, q.err, nil
 }
 func (*errQuerier) LabelValues(name string) ([]string, error) { return nil, nil }
+func (*errQuerier) LabelNames() ([]string, error)             { return nil, nil }
 func (*errQuerier) Close() error                              { return nil }
 
 // errSeriesSet implements storage.SeriesSet which always returns error.
@@ -193,7 +194,7 @@ func TestQueryError(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 	engine := NewEngine(opts)
-	errStorage := ErrStorage(fmt.Errorf("storage error"))
+	errStorage := ErrStorage{fmt.Errorf("storage error")}
 	queryable := storage.QueryableFunc(func(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
 		return &errQuerier{err: errStorage}, nil
 	})
@@ -424,7 +425,8 @@ load 10s
 			MaxSamples: 1,
 			Result: Result{
 				nil,
-				Scalar{V: 1, T: 1000}},
+				Scalar{V: 1, T: 1000},
+				nil},
 			Start: time.Unix(1, 0),
 		},
 		{
@@ -432,6 +434,7 @@ load 10s
 			MaxSamples: 0,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start: time.Unix(1, 0),
@@ -441,6 +444,7 @@ load 10s
 			MaxSamples: 0,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start: time.Unix(1, 0),
@@ -454,6 +458,7 @@ load 10s
 					Sample{Point: Point{V: 1, T: 1000},
 						Metric: labels.FromStrings("__name__", "metric")},
 				},
+				nil,
 			},
 			Start: time.Unix(1, 0),
 		},
@@ -466,6 +471,7 @@ load 10s
 					Points: []Point{{V: 1, T: 0}, {V: 2, T: 10000}},
 					Metric: labels.FromStrings("__name__", "metric")},
 				},
+				nil,
 			},
 			Start: time.Unix(10, 0),
 		},
@@ -474,6 +480,7 @@ load 10s
 			MaxSamples: 0,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start: time.Unix(10, 0),
@@ -488,6 +495,7 @@ load 10s
 					Points: []Point{{V: 1, T: 0}, {V: 1, T: 1000}, {V: 1, T: 2000}},
 					Metric: labels.FromStrings()},
 				},
+				nil,
 			},
 			Start:    time.Unix(0, 0),
 			End:      time.Unix(2, 0),
@@ -498,6 +506,7 @@ load 10s
 			MaxSamples: 0,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start:    time.Unix(0, 0),
@@ -513,6 +522,7 @@ load 10s
 					Points: []Point{{V: 1, T: 0}, {V: 1, T: 1000}, {V: 1, T: 2000}},
 					Metric: labels.FromStrings("__name__", "metric")},
 				},
+				nil,
 			},
 			Start:    time.Unix(0, 0),
 			End:      time.Unix(2, 0),
@@ -523,6 +533,7 @@ load 10s
 			MaxSamples: 2,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start:    time.Unix(0, 0),
@@ -538,6 +549,7 @@ load 10s
 					Points: []Point{{V: 1, T: 0}, {V: 1, T: 5000}, {V: 2, T: 10000}},
 					Metric: labels.FromStrings("__name__", "metric")},
 				},
+				nil,
 			},
 			Start:    time.Unix(0, 0),
 			End:      time.Unix(10, 0),
@@ -548,6 +560,7 @@ load 10s
 			MaxSamples: 2,
 			Result: Result{
 				ErrTooManySamples(env),
+				nil,
 				nil,
 			},
 			Start:    time.Unix(0, 0),
