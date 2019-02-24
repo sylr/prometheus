@@ -306,12 +306,14 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 		}
 
 		// Add external labels.
-		if config.CurrentConfig != nil && (*config.CurrentConfig).GlobalConfig.ExternalLabels != nil {
+		if config.CurrentConfig != nil {
+			config.CurrentConfigMutex.RLock()
 			for ln, lv := range (*config.CurrentConfig).GlobalConfig.ExternalLabels {
 				if _, ok := l[string(ln)]; !ok {
 					l[string(ln)] = string(lv)
 				}
 			}
+			config.CurrentConfigMutex.RUnlock()
 		}
 
 		tmplData := template.AlertTemplateData(l, smpl.V)
