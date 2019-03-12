@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -60,6 +61,30 @@ var (
 			Objectives: map[float64]float64{0.01: 0.001, 0.05: 0.005, 0.5: 0.05, 0.90: 0.01, 0.99: 0.001},
 		},
 		[]string{"interval"},
+	)
+	targetScrapePools = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pools_total",
+			Help: "Total number of scrape pool creation atttempts.",
+		},
+	)
+	targetScrapePoolsFailed = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pools_failed_total",
+			Help: "Total number of scrape pool creations that failed.",
+		},
+	)
+	targetScrapePoolReloads = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pool_reloads_total",
+			Help: "Total number of scrape loop reloads.",
+		},
+	)
+	targetScrapePoolReloadsFailed = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "prometheus_target_scrape_pool_reloads_failed_total",
+			Help: "Total number of failed scrape loop reloads.",
+		},
 	)
 	targetSyncIntervalLength = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -105,6 +130,10 @@ var (
 func init() {
 	prometheus.MustRegister(targetIntervalLength)
 	prometheus.MustRegister(targetReloadIntervalLength)
+	prometheus.MustRegister(targetScrapePools)
+	prometheus.MustRegister(targetScrapePoolsFailed)
+	prometheus.MustRegister(targetScrapePoolReloads)
+	prometheus.MustRegister(targetScrapePoolReloadsFailed)
 	prometheus.MustRegister(targetSyncIntervalLength)
 	prometheus.MustRegister(targetScrapePoolSyncsCounter)
 	prometheus.MustRegister(targetScrapeSampleLimit)
@@ -129,22 +158,31 @@ type scrapePool struct {
 	cancel         context.CancelFunc
 
 	// Constructor for new scrape loops. This is settable for testing convenience.
-	newLoop func(*Target, scraper, int, bool, []*relabel.Config) loop
+	newLoop func(scrapeLoopOptions) loop
+}
+
+type scrapeLoopOptions struct {
+	target      *Target
+	scraper     scraper
+	limit       int
+	honorLabels bool
+	mrc         []*relabel.Config
 }
 
 const maxAheadTime = 10 * time.Minute
 
 type labelsMutator func(labels.Labels) labels.Labels
 
-func newScrapePool(cfg *config.ScrapeConfig, app Appendable, logger log.Logger) *scrapePool {
+func newScrapePool(cfg *config.ScrapeConfig, app Appendable, jitterSeed uint64, logger log.Logger) (*scrapePool, error) {
+	targetScrapePools.Inc()
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
 
 	client, err := config_util.NewClientFromConfig(cfg.HTTPClientConfig, cfg.JobName)
 	if err != nil {
-		// Any errors that could occur here should be caught during config validation.
-		level.Error(logger).Log("msg", "Error creating HTTP client", "err", err)
+		targetScrapePoolsFailed.Inc()
+		return nil, errors.Wrap(err, "error creating HTTP client")
 	}
 
 	buffers := pool.New(1e3, 100e6, 3, func(sz int) interface{} { return make([]byte, 0, sz) })
@@ -159,30 +197,33 @@ func newScrapePool(cfg *config.ScrapeConfig, app Appendable, logger log.Logger) 
 		loops:         map[uint64]loop{},
 		logger:        logger,
 	}
-	sp.newLoop = func(t *Target, s scraper, limit int, honor bool, mrc []*relabel.Config) loop {
+	sp.newLoop = func(opts scrapeLoopOptions) loop {
 		// Update the targets retrieval function for metadata to a new scrape cache.
 		cache := newScrapeCache()
-		t.setMetadataStore(cache)
+		opts.target.setMetadataStore(cache)
 
 		return newScrapeLoop(
 			ctx,
-			s,
-			log.With(logger, "target", t),
+			opts.scraper,
+			log.With(logger, "target", opts.target),
 			buffers,
-			func(l labels.Labels) labels.Labels { return mutateSampleLabels(l, t, honor, mrc) },
-			func(l labels.Labels) labels.Labels { return mutateReportSampleLabels(l, t) },
+			func(l labels.Labels) labels.Labels {
+				return mutateSampleLabels(l, opts.target, opts.honorLabels, opts.mrc)
+			},
+			func(l labels.Labels) labels.Labels { return mutateReportSampleLabels(l, opts.target) },
 			func() storage.Appender {
 				app, err := app.Appender()
 				if err != nil {
 					panic(err)
 				}
-				return appender(app, limit)
+				return appender(app, opts.limit)
 			},
 			cache,
+			jitterSeed,
 		)
 	}
 
-	return sp
+	return sp, nil
 }
 
 func (sp *scrapePool) ActiveTargets() []*Target {
@@ -227,7 +268,8 @@ func (sp *scrapePool) stop() {
 // reload the scrape pool with the given scrape configuration. The target state is preserved
 // but all scrape loops are restarted with the new scrape configuration.
 // This method returns after all scrape loops that were stopped have stopped scraping.
-func (sp *scrapePool) reload(cfg *config.ScrapeConfig) {
+func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
+	targetScrapePoolReloads.Inc()
 	start := time.Now()
 
 	sp.mtx.Lock()
@@ -235,8 +277,8 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) {
 
 	client, err := config_util.NewClientFromConfig(cfg.HTTPClientConfig, cfg.JobName)
 	if err != nil {
-		// Any errors that could occur here should be caught during config validation.
-		level.Error(sp.logger).Log("msg", "Error creating HTTP client", "err", err)
+		targetScrapePoolReloadsFailed.Inc()
+		return errors.Wrap(err, "error creating HTTP client")
 	}
 	sp.config = cfg
 	sp.client = client
@@ -254,7 +296,13 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) {
 		var (
 			t       = sp.activeTargets[fp]
 			s       = &targetScraper{Target: t, client: sp.client, timeout: timeout}
-			newLoop = sp.newLoop(t, s, limit, honor, mrc)
+			newLoop = sp.newLoop(scrapeLoopOptions{
+				target:      t,
+				scraper:     s,
+				limit:       limit,
+				honorLabels: honor,
+				mrc:         mrc,
+			})
 		)
 		wg.Add(1)
 
@@ -272,6 +320,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) {
 	targetReloadIntervalLength.WithLabelValues(interval.String()).Observe(
 		time.Since(start).Seconds(),
 	)
+	return nil
 }
 
 // Sync converts target groups into actual scrape targets and synchronizes
@@ -328,7 +377,13 @@ func (sp *scrapePool) sync(targets []*Target) {
 
 		if _, ok := sp.activeTargets[hash]; !ok {
 			s := &targetScraper{Target: t, client: sp.client, timeout: timeout}
-			l := sp.newLoop(t, s, limit, honor, mrc)
+			l := sp.newLoop(scrapeLoopOptions{
+				target:      t,
+				scraper:     s,
+				limit:       limit,
+				honorLabels: honor,
+				mrc:         mrc,
+			})
 
 			sp.activeTargets[hash] = t
 			sp.loops[hash] = l
@@ -435,7 +490,7 @@ func appender(app storage.Appender, limit int) storage.Appender {
 type scraper interface {
 	scrape(ctx context.Context, w io.Writer) (string, error)
 	report(start time.Time, dur time.Duration, err error)
-	offset(interval time.Duration) time.Duration
+	offset(interval time.Duration, jitterSeed uint64) time.Duration
 }
 
 // targetScraper implements the scraper interface for a target.
@@ -526,6 +581,7 @@ type scrapeLoop struct {
 	cache          *scrapeCache
 	lastScrapeSize int
 	buffers        *pool.Pool
+	jitterSeed     uint64
 
 	appender            func() storage.Appender
 	sampleMutator       labelsMutator
@@ -744,6 +800,7 @@ func newScrapeLoop(ctx context.Context,
 	reportSampleMutator labelsMutator,
 	appender func() storage.Appender,
 	cache *scrapeCache,
+	jitterSeed uint64,
 ) *scrapeLoop {
 	if l == nil {
 		l = log.NewNopLogger()
@@ -762,6 +819,7 @@ func newScrapeLoop(ctx context.Context,
 		sampleMutator:       sampleMutator,
 		reportSampleMutator: reportSampleMutator,
 		stopped:             make(chan struct{}),
+		jitterSeed:          jitterSeed,
 		l:                   l,
 		ctx:                 ctx,
 	}
@@ -772,7 +830,7 @@ func newScrapeLoop(ctx context.Context,
 
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	select {
-	case <-time.After(sl.scraper.offset(interval)):
+	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
 		// Continue after a scraping offset.
 	case <-sl.scrapeCtx.Done():
 		close(sl.stopped)

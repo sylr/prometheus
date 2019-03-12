@@ -1,3 +1,39 @@
+## 2.8.0 / 2019-03-12
+
+This release uses Write-Ahead Logging (WAL) for the remote_write API. This currently causes a slight increase in memory usage, which will be addressed in future releases.
+
+* [CHANGE] `prometheus_tsdb_storage_blocks_bytes_total` is now `prometheus_tsdb_storage_blocks_bytes`. prometheus/tsdb#506
+* [FEATURE] [EXPERIMENTAL] Time overlapping blocks are now allowed; vertical compaction and vertical query merge. It is an optional feature which is controlled by the `--storage.tsdb.allow-overlapping-blocks` flag, disabled by default. prometheus/tsdb#370
+* [ENHANCEMENT] Use the WAL for remote_write API. #4588
+* [ENHANCEMENT] Query performance improvements. prometheus/tsdb#531
+* [ENHANCEMENT] UI enhancements with upgrade to Bootstrap 4. #5226
+* [ENHANCEMENT] Reduce time that Alertmanagers are in flux when reloaded. #5126
+* [ENHANCEMENT] Limit number of metrics displayed on UI to 10000. #5139
+* [ENHANCEMENT] (1) Remember All/Unhealthy choice on target-overview when reloading page. (2) Resize text-input area on Graph page on mouseclick. #5201
+* [ENHANCEMENT] In `histogram_quantile` merge buckets with equivalent le values. #5158.
+* [ENHANCEMENT] Show list of offending labels in the error message in many-to-many scenarios. #5189
+* [ENHANCEMENT] Show `Storage Retention` criteria in effect on `/status` page. #5322
+* [BUGFIX] Fix sorting of rule groups. #5260
+* [BUGFIX] Fix support for password_file and bearer_token_file in Kubernetes SD. #5211
+* [BUGFIX] Scrape: catch errors when creating HTTP clients #5182. Adds new metrics:
+  * `prometheus_target_scrape_pools_total`
+  * `prometheus_target_scrape_pools_failed_total`
+  * `prometheus_target_scrape_pool_reloads_total`
+  * `prometheus_target_scrape_pool_reloads_failed_total`
+* [BUGFIX] Fix panic when aggregator param is not a literal. #5290
+
+## 2.7.2 / 2019-03-02
+
+* [BUGFIX] `prometheus_rule_group_last_evaluation_timestamp_seconds` is now a unix timestamp. #5186
+
+## 2.7.1 / 2019-01-31
+
+This release has a fix for a Stored DOM XSS vulnerability that can be triggered when using the query history functionality. Thanks to Dor Tumarkin from Checkmarx for reporting it.
+
+* [BUGFIX/SECURITY] Fix a Stored DOM XSS vulnerability with query history. #5163
+* [BUGFIX] `prometheus_rule_group_last_duration_seconds` now reports seconds instead of nanoseconds. #5153
+* [BUGFIX] Make sure the targets are consistently sorted in the targets page. #5161
+
 ## 2.7.0 / 2019-01-28
 
 We're rolling back the Dockerfile changes introduced in 2.6.0. If you made changes to your docker deployment in 2.6.0, you will need to roll them back. This release also adds experimental support for disk size based retention. To accomodate that we are deprecating the flag `storage.tsdb.retention` in favour of `storage.tsdb.retention.time`. We print a warning if the flag is in use, but it will function without breaking until Prometheus 3.0.
@@ -1191,7 +1227,7 @@ All changes:
   from embedding into the binary. Those files are only used for debugging,
   and then you can use -web.use-local-assets. By including fewer files, the
   RAM usage during compilation is much more manageable.
-* [ENHANCEMENT] Help link points to http://prometheus.github.io now.
+* [ENHANCEMENT] Help link points to https://prometheus.github.io now.
 * [FEATURE] Consoles for haproxy and cloudwatch.
 * [BUGFIX] Several fixes to graphs in consoles.
 * [CLEANUP] Removed a file size check that did not check anything.

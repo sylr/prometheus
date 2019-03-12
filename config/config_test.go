@@ -23,9 +23,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/prometheus/pkg/relabel"
+	config_util "github.com/prometheus/common/config"
+	"github.com/prometheus/common/model"
+	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/prometheus/discovery/azure"
+	sd_config "github.com/prometheus/prometheus/discovery/config"
 	"github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/discovery/dns"
 	"github.com/prometheus/prometheus/discovery/ec2"
@@ -36,12 +40,8 @@ import (
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/discovery/triton"
 	"github.com/prometheus/prometheus/discovery/zookeeper"
-
-	config_util "github.com/prometheus/common/config"
-	"github.com/prometheus/common/model"
-	sd_config "github.com/prometheus/prometheus/discovery/config"
+	"github.com/prometheus/prometheus/pkg/relabel"
 	"github.com/prometheus/prometheus/util/testutil"
-	"gopkg.in/yaml.v2"
 )
 
 func mustParseURL(u string) *config_util.URL {
@@ -88,6 +88,12 @@ var expectedConf = &Config{
 			URL:           mustParseURL("http://remote2/push"),
 			RemoteTimeout: model.Duration(30 * time.Second),
 			QueueConfig:   DefaultQueueConfig,
+			HTTPClientConfig: config_util.HTTPClientConfig{
+				TLSConfig: config_util.TLSConfig{
+					CertFile: filepath.FromSlash("testdata/valid_cert_file"),
+					KeyFile:  filepath.FromSlash("testdata/valid_key_file"),
+				},
+			},
 		},
 	},
 
@@ -102,6 +108,12 @@ var expectedConf = &Config{
 			RemoteTimeout:    model.Duration(1 * time.Minute),
 			ReadRecent:       false,
 			RequiredMatchers: model.LabelSet{"job": "special"},
+			HTTPClientConfig: config_util.HTTPClientConfig{
+				TLSConfig: config_util.TLSConfig{
+					CertFile: filepath.FromSlash("testdata/valid_cert_file"),
+					KeyFile:  filepath.FromSlash("testdata/valid_key_file"),
+				},
+			},
 		},
 	},
 
@@ -282,7 +294,7 @@ var expectedConf = &Config{
 						Server:          "localhost:1234",
 						Token:           "mysecret",
 						Services:        []string{"nginx", "cache", "mysql"},
-						ServiceTag:      "canary",
+						ServiceTags:     []string{"canary", "v1"},
 						NodeMeta:        map[string]string{"rack": "123"},
 						TagSeparator:    consul.DefaultSDConfig.TagSeparator,
 						Scheme:          "https",
@@ -341,9 +353,15 @@ var expectedConf = &Config{
 					{
 						APIServer: kubernetesSDHostURL(),
 						Role:      kubernetes.RoleEndpoint,
-						BasicAuth: &config_util.BasicAuth{
-							Username: "myusername",
-							Password: "mysecret",
+						HTTPClientConfig: config_util.HTTPClientConfig{
+							BasicAuth: &config_util.BasicAuth{
+								Username: "myusername",
+								Password: "mysecret",
+							},
+							TLSConfig: config_util.TLSConfig{
+								CertFile: filepath.FromSlash("testdata/valid_cert_file"),
+								KeyFile:  filepath.FromSlash("testdata/valid_key_file"),
+							},
 						},
 						NamespaceDiscovery: kubernetes.NamespaceDiscovery{},
 					},
@@ -358,6 +376,12 @@ var expectedConf = &Config{
 
 			MetricsPath: DefaultScrapeConfig.MetricsPath,
 			Scheme:      DefaultScrapeConfig.Scheme,
+			HTTPClientConfig: config_util.HTTPClientConfig{
+				BasicAuth: &config_util.BasicAuth{
+					Username:     "myusername",
+					PasswordFile: filepath.FromSlash("testdata/valid_password_file"),
+				},
+			},
 
 			ServiceDiscoveryConfig: sd_config.ServiceDiscoveryConfig{
 				KubernetesSDConfigs: []*kubernetes.SDConfig{
@@ -559,9 +583,9 @@ var expectedConf = &Config{
 						Port:            80,
 						RefreshInterval: model.Duration(60 * time.Second),
 						TLSConfig: config_util.TLSConfig{
-							CAFile:   "valid_ca_file",
-							CertFile: "valid_cert_file",
-							KeyFile:  "valid_key_file",
+							CAFile:   "testdata/valid_ca_file",
+							CertFile: "testdata/valid_cert_file",
+							KeyFile:  "testdata/valid_key_file",
 						},
 					},
 				},
@@ -601,7 +625,7 @@ func TestLoadConfig(t *testing.T) {
 	testutil.Ok(t, err)
 
 	expectedConf.original = c.original
-	testutil.Equals(t, expectedConf, c)
+	assert.Equal(t, expectedConf, c)
 }
 
 // YAML marshaling must not reveal authentication credentials.
@@ -628,6 +652,11 @@ func TestLoadConfigRuleFilesAbsolutePath(t *testing.T) {
 
 	ruleFilesExpectedConf.original = c.original
 	testutil.Equals(t, ruleFilesExpectedConf, c)
+}
+
+func TestKubernetesEmptyAPIServer(t *testing.T) {
+	_, err := LoadFile("testdata/kubernetes_empty_apiserver.good.yml")
+	testutil.Ok(t, err)
 }
 
 var expectedErrors = []struct {
@@ -700,6 +729,9 @@ var expectedErrors = []struct {
 	}, {
 		filename: "bearertoken_basicauth.bad.yml",
 		errMsg:   "at most one of basic_auth, bearer_token & bearer_token_file must be configured",
+	}, {
+		filename: "kubernetes_http_config_without_api_server.bad.yml",
+		errMsg:   "to use custom HTTP client configuration please provide the 'api_server' URL explicitly",
 	}, {
 		filename: "kubernetes_bearertoken.bad.yml",
 		errMsg:   "at most one of bearer_token & bearer_token_file must be configured",

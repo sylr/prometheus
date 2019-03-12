@@ -107,9 +107,10 @@ var (
 		MinShards:         1,
 		MaxSamplesPerSend: 100,
 
-		// By default, buffer 100 batches, which at 100ms per batch is 10s. At
-		// 1000 shards, this will buffer 10M samples total.
-		Capacity:          100 * 100,
+		// Each shard will have a max of 10 samples pending in it's channel, plus the pending
+		// samples that have been enqueued. Theoretically we should only ever have about 110 samples
+		// per shard pending. At 1000 shards that's 110k.
+		Capacity:          10,
 		BatchSendDeadline: model.Duration(5 * time.Second),
 
 		// Max number of times to retry a batch on recoverable errors.
@@ -152,30 +153,34 @@ func resolveFilepaths(baseDir string, cfg *Config) {
 		cfg.RuleFiles[i] = join(rf)
 	}
 
+	tlsPaths := func(cfg *config_util.TLSConfig) {
+		cfg.CAFile = join(cfg.CAFile)
+		cfg.CertFile = join(cfg.CertFile)
+		cfg.KeyFile = join(cfg.KeyFile)
+	}
 	clientPaths := func(scfg *config_util.HTTPClientConfig) {
+		if scfg.BasicAuth != nil {
+			scfg.BasicAuth.PasswordFile = join(scfg.BasicAuth.PasswordFile)
+		}
 		scfg.BearerTokenFile = join(scfg.BearerTokenFile)
-		scfg.TLSConfig.CAFile = join(scfg.TLSConfig.CAFile)
-		scfg.TLSConfig.CertFile = join(scfg.TLSConfig.CertFile)
-		scfg.TLSConfig.KeyFile = join(scfg.TLSConfig.KeyFile)
+		tlsPaths(&scfg.TLSConfig)
 	}
 	sdPaths := func(cfg *sd_config.ServiceDiscoveryConfig) {
 		for _, kcfg := range cfg.KubernetesSDConfigs {
-			kcfg.BearerTokenFile = join(kcfg.BearerTokenFile)
-			kcfg.TLSConfig.CAFile = join(kcfg.TLSConfig.CAFile)
-			kcfg.TLSConfig.CertFile = join(kcfg.TLSConfig.CertFile)
-			kcfg.TLSConfig.KeyFile = join(kcfg.TLSConfig.KeyFile)
+			clientPaths(&kcfg.HTTPClientConfig)
 		}
 		for _, mcfg := range cfg.MarathonSDConfigs {
 			mcfg.AuthTokenFile = join(mcfg.AuthTokenFile)
-			mcfg.HTTPClientConfig.BearerTokenFile = join(mcfg.HTTPClientConfig.BearerTokenFile)
-			mcfg.HTTPClientConfig.TLSConfig.CAFile = join(mcfg.HTTPClientConfig.TLSConfig.CAFile)
-			mcfg.HTTPClientConfig.TLSConfig.CertFile = join(mcfg.HTTPClientConfig.TLSConfig.CertFile)
-			mcfg.HTTPClientConfig.TLSConfig.KeyFile = join(mcfg.HTTPClientConfig.TLSConfig.KeyFile)
+			clientPaths(&mcfg.HTTPClientConfig)
 		}
 		for _, consulcfg := range cfg.ConsulSDConfigs {
-			consulcfg.TLSConfig.CAFile = join(consulcfg.TLSConfig.CAFile)
-			consulcfg.TLSConfig.CertFile = join(consulcfg.TLSConfig.CertFile)
-			consulcfg.TLSConfig.KeyFile = join(consulcfg.TLSConfig.KeyFile)
+			tlsPaths(&consulcfg.TLSConfig)
+		}
+		for _, cfg := range cfg.OpenstackSDConfigs {
+			tlsPaths(&cfg.TLSConfig)
+		}
+		for _, cfg := range cfg.TritonSDConfigs {
+			tlsPaths(&cfg.TLSConfig)
 		}
 		for _, filecfg := range cfg.FileSDConfigs {
 			for i, fn := range filecfg.Files {
@@ -191,6 +196,12 @@ func resolveFilepaths(baseDir string, cfg *Config) {
 	for _, cfg := range cfg.AlertingConfig.AlertmanagerConfigs {
 		clientPaths(&cfg.HTTPClientConfig)
 		sdPaths(&cfg.ServiceDiscoveryConfig)
+	}
+	for _, cfg := range cfg.RemoteReadConfigs {
+		clientPaths(&cfg.HTTPClientConfig)
+	}
+	for _, cfg := range cfg.RemoteWriteConfigs {
+		clientPaths(&cfg.HTTPClientConfig)
 	}
 }
 

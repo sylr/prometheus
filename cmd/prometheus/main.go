@@ -19,7 +19,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Comment this line to disable pprof endpoint.
@@ -187,16 +186,19 @@ func main() {
 		Hidden().PlaceHolder("<bytes>").BytesVar(&cfg.tsdb.WALSegmentSize)
 
 	a.Flag("storage.tsdb.retention", "[DEPRECATED] How long to retain samples in storage. This flag has been deprecated, use \"storage.tsdb.retention.time\" instead").
-		Default(defaultRetentionString).SetValue(&oldFlagRetentionDuration)
+		SetValue(&oldFlagRetentionDuration)
 
-	a.Flag("storage.tsdb.retention.time", "How long to retain samples in storage. Overrides \"storage.tsdb.retention\" if this flag is set to anything other than default.").
-		Default(defaultRetentionString).SetValue(&newFlagRetentionDuration)
+	a.Flag("storage.tsdb.retention.time", "How long to retain samples in storage. When this flag is set it overrides \"storage.tsdb.retention\". If neither this flag nor \"storage.tsdb.retention\" nor \"storage.tsdb.retention.size\" is set, the retention time defaults to "+defaultRetentionString+".").
+		SetValue(&newFlagRetentionDuration)
 
 	a.Flag("storage.tsdb.retention.size", "[EXPERIMENTAL] Maximum number of bytes that can be stored for blocks. Units supported: KB, MB, GB, TB, PB. This flag is experimental and can be changed in future releases.").
-		Default("0").BytesVar(&cfg.tsdb.MaxBytes)
+		BytesVar(&cfg.tsdb.MaxBytes)
 
 	a.Flag("storage.tsdb.no-lockfile", "Do not create lockfile in data directory.").
 		Default("false").BoolVar(&cfg.tsdb.NoLockfile)
+
+	a.Flag("storage.tsdb.allow-overlapping-blocks", "[EXPERIMENTAL] Allow overlapping blocks which in-turn enables vertical compaction and vertical query merge.").
+		Default("false").BoolVar(&cfg.tsdb.AllowOverlappingBlocks)
 
 	a.Flag("storage.remote.flush-deadline", "How long to wait flushing sample on shutdown or config reload.").
 		Default("1m").PlaceHolder("<duration>").SetValue(&cfg.RemoteFlushDeadline)
@@ -245,6 +247,8 @@ func main() {
 		os.Exit(2)
 	}
 
+	logger := promlog.New(&cfg.promlogConfig)
+
 	cfg.web.ExternalURL, err = computeExternalURL(cfg.prometheusURL, cfg.web.ListenAddress)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "parse external URL %q", cfg.prometheusURL))
@@ -265,35 +269,50 @@ func main() {
 	// RoutePrefix must always be at least '/'.
 	cfg.web.RoutePrefix = "/" + strings.Trim(cfg.web.RoutePrefix, "/")
 
-	cfg.tsdb.RetentionDuration = chooseRetention(oldFlagRetentionDuration, newFlagRetentionDuration)
-
-	// Check for overflows. This limits our max retention to ~292.5y.
-	if cfg.tsdb.RetentionDuration < 0 {
-		cfg.tsdb.RetentionDuration = math.MaxInt64
-	}
-
-	if cfg.tsdb.MaxBlockDuration == 0 {
-		cfg.tsdb.MaxBlockDuration = cfg.tsdb.RetentionDuration / 10
-
-		// Prevent blocks from getting too big.
-		monthLong, err := model.ParseDuration("31d")
-		if err != nil {
-			panic(err)
+	{ // Time retention settings.
+		if oldFlagRetentionDuration != 0 {
+			level.Warn(logger).Log("deprecation_notice", "'storage.tsdb.retention' flag is deprecated use 'storage.tsdb.retention.time' instead.")
+			cfg.tsdb.RetentionDuration = oldFlagRetentionDuration
 		}
 
-		if cfg.tsdb.MaxBlockDuration > monthLong {
-			cfg.tsdb.MaxBlockDuration = monthLong
+		// When the new flag is set it takes precedence.
+		if newFlagRetentionDuration != 0 {
+			cfg.tsdb.RetentionDuration = newFlagRetentionDuration
+		}
+
+		if cfg.tsdb.RetentionDuration == 0 && cfg.tsdb.MaxBytes == 0 {
+			cfg.tsdb.RetentionDuration = defaultRetentionDuration
+			level.Info(logger).Log("msg", "no time or size retention was set so using the default time retention", "duration", defaultRetentionDuration)
+		}
+
+		// Check for overflows. This limits our max retention to 100y.
+		if cfg.tsdb.RetentionDuration < 0 {
+			y, err := model.ParseDuration("100y")
+			if err != nil {
+				panic(err)
+			}
+			cfg.tsdb.RetentionDuration = y
+			level.Info(logger).Log("msg", "time retention value is too high. Limiting to: "+y.String())
+		}
+	}
+
+	{ // Max block size  settings.
+		if cfg.tsdb.MaxBlockDuration == 0 {
+			maxBlockDuration, err := model.ParseDuration("31d")
+			if err != nil {
+				panic(err)
+			}
+			// When the time retention is set and not too big use to define the max block duration.
+			if cfg.tsdb.RetentionDuration != 0 && cfg.tsdb.RetentionDuration/10 < maxBlockDuration {
+				maxBlockDuration = cfg.tsdb.RetentionDuration / 10
+			}
+
+			cfg.tsdb.MaxBlockDuration = maxBlockDuration
 		}
 	}
 
 	promql.LookbackDelta = time.Duration(cfg.lookbackDelta)
 	promql.SetDefaultEvaluationInterval(time.Duration(config.DefaultGlobalConfig.EvaluationInterval))
-
-	logger := promlog.New(&cfg.promlogConfig)
-
-	if oldFlagRetentionDuration != defaultRetentionDuration {
-		level.Warn(logger).Log("deprecation_notice", `"storage.tsdb.retention" flag is deprecated use "storage.tsdb.retention.time" instead.`)
-	}
 
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
 	klog.ClampLevel(6)
@@ -307,7 +326,7 @@ func main() {
 
 	var (
 		localStorage  = &tsdb.ReadyStorage{}
-		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), localStorage.StartTime, time.Duration(cfg.RemoteFlushDeadline))
+		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline))
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
@@ -356,6 +375,7 @@ func main() {
 	cfg.web.ScrapeManager = scrapeManager
 	cfg.web.RuleManager = ruleManager
 	cfg.web.Notifier = notifierManager
+	cfg.web.TSDBCfg = cfg.tsdb
 
 	cfg.web.Version = &web.PrometheusVersion{
 		Version:   version.Version,
@@ -633,6 +653,15 @@ func main() {
 					return fmt.Errorf("opening storage failed: %s", err)
 				}
 				level.Info(logger).Log("msg", "TSDB started")
+				level.Debug(logger).Log("msg", "TSDB options",
+					"MinBlockDuration", cfg.tsdb.MinBlockDuration,
+					"MaxBlockDuration", cfg.tsdb.MaxBlockDuration,
+					"MaxBytes", cfg.tsdb.MaxBytes,
+					"NoLockfile", cfg.tsdb.NoLockfile,
+					"RetentionDuration", cfg.tsdb.RetentionDuration,
+					"WALSegmentSize", cfg.tsdb.WALSegmentSize,
+					"AllowOverlappingBlocks", cfg.tsdb.AllowOverlappingBlocks,
+				)
 
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
@@ -798,20 +827,4 @@ func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 			s.Send(res...)
 		}
 	}
-}
-
-// chooseRetention is some roundabout code to support both RetentionDuration and Retention (for different flags).
-// If Retention is 15d, then it means that the default value is set and the value of RetentionDuration is used.
-func chooseRetention(oldFlagDuration, newFlagDuration model.Duration) model.Duration {
-	retention := oldFlagDuration
-	if retention == defaultRetentionDuration {
-		retention = newFlagDuration
-	}
-
-	// Further newFlag takes precedence if it's set to anything other than default.
-	if newFlagDuration != defaultRetentionDuration {
-		retention = newFlagDuration
-	}
-
-	return retention
 }

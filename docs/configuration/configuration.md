@@ -24,7 +24,7 @@ This will also reload any configured rule files.
 
 To specify which configuration file to load, use the `--config.file` flag.
 
-The file is written in [YAML format](http://en.wikipedia.org/wiki/YAML),
+The file is written in [YAML format](https://en.wikipedia.org/wiki/YAML),
 defined by the scheme described below.
 Brackets indicate that a parameter is optional. For non-list parameters the
 value is set to the specified default.
@@ -246,7 +246,7 @@ A `tls_config` allows configuring TLS connections.
 [ key_file: <filename> ]
 
 # ServerName extension to indicate the name of the server.
-# http://tools.ietf.org/html/rfc4366#section-3.1
+# https://tools.ietf.org/html/rfc4366#section-3.1
 [ server_name: <string> ]
 
 # Disable validation of the server certificate.
@@ -337,8 +337,9 @@ services:
 # See https://www.consul.io/api/catalog.html#list-nodes-for-service to know more
 # about the possible filters that can be used.
 
-# An optional tag used to filter nodes for a given service.
-[ tag: <string> ]
+# An optional list of tags used to filter nodes for a given service. Services must contain all tags in the list.
+tags:
+  [ - <string> ]
 
 # Node metadata used to filter nodes for a given service.
 [ node_meta:
@@ -678,7 +679,7 @@ service account and place the credential file in one of the expected locations.
 ### `<kubernetes_sd_config>`
 
 Kubernetes SD configurations allow retrieving scrape targets from
-[Kubernetes'](http://kubernetes.io/) REST API and always staying synchronized with
+[Kubernetes'](https://kubernetes.io/) REST API and always staying synchronized with
 the cluster state.
 
 One of the following `role` types can be configured to discover targets:
@@ -812,6 +813,9 @@ basic_auth:
 # Optional bearer token file authentication information.
 [ bearer_token_file: <filename> ]
 
+# Optional proxy URL.
+[ proxy_url: <string> ]
+
 # TLS configuration.
 tls_config:
   [ <tls_config> ]
@@ -935,7 +939,7 @@ Serverset SD configurations allow retrieving scrape targets from [Serversets]
 (https://github.com/twitter/finagle/tree/master/finagle-serversets) which are
 stored in [Zookeeper](https://zookeeper.apache.org/). Serversets are commonly
 used by [Finagle](https://twitter.github.io/finagle/) and
-[Aurora](http://aurora.apache.org/).
+[Aurora](https://aurora.apache.org/).
 
 The following meta labels are available on targets during relabeling:
 
@@ -995,7 +999,7 @@ groups:
 # The port to use for discovery and metric scraping.
 [ port: <int> | default = 9163 ]
 
-# The interval which should should be used for refreshing target containers.
+# The interval which should be used for refreshing target containers.
 [ refresh_interval: <duration> | default = 60s ]
 
 # The Triton discovery API version.
