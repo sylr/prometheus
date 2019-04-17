@@ -11,6 +11,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Needs to be defined before including Makefile.common to auto-generate targets
+DOCKER_ARCHS ?= amd64 armv7 arm64
+
 include Makefile.common
 
 STATICCHECK_IGNORE = \
@@ -18,10 +21,6 @@ STATICCHECK_IGNORE = \
   github.com/prometheus/prometheus/pkg/textparse/openmetricslex.l.go:SA4006
 
 DOCKER_IMAGE_NAME       ?= prometheus
-
-# Go modules needs the bzr binary because of the dependency on launchpad.net/gocheck.
-$(eval $(call PRECHECK_COMMAND_template,bzr))
-PRECHECK_OPTIONS_bzr = version
 
 .PHONY: assets
 assets:

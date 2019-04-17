@@ -34,10 +34,11 @@ import (
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
+	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/util/testutil"
 	"github.com/prometheus/tsdb"
-	"github.com/prometheus/tsdb/labels"
+	tsdbLabels "github.com/prometheus/tsdb/labels"
 )
 
 const defaultFlushDeadline = 1 * time.Minute
@@ -60,7 +61,7 @@ func TestSampleDelivery(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	m := NewQueueManager(nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, nil, nil, c, defaultFlushDeadline)
-	m.seriesLabels = refSeriesToLabelsProto(series)
+	m.StoreSeries(series, 0)
 
 	// These should be received by the client.
 	m.Start()
@@ -88,7 +89,7 @@ func TestSampleDeliveryTimeout(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	m := NewQueueManager(nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, nil, nil, c, defaultFlushDeadline)
-	m.seriesLabels = refSeriesToLabelsProto(series)
+	m.StoreSeries(series, 0)
 	m.Start()
 	defer m.Stop()
 
@@ -116,7 +117,7 @@ func TestSampleDeliveryOrder(t *testing.T) {
 		})
 		series = append(series, tsdb.RefSeries{
 			Ref:    uint64(i),
-			Labels: labels.Labels{labels.Label{Name: "__name__", Value: name}},
+			Labels: tsdbLabels.Labels{tsdbLabels.Label{Name: "__name__", Value: name}},
 		})
 	}
 
@@ -128,7 +129,7 @@ func TestSampleDeliveryOrder(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	m := NewQueueManager(nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), config.DefaultQueueConfig, nil, nil, c, defaultFlushDeadline)
-	m.seriesLabels = refSeriesToLabelsProto(series)
+	m.StoreSeries(series, 0)
 
 	m.Start()
 	defer m.Stop()
@@ -147,7 +148,7 @@ func TestShutdown(t *testing.T) {
 
 	m := NewQueueManager(nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), config.DefaultQueueConfig, nil, nil, c, deadline)
 	samples, series := createTimeseries(2 * config.DefaultQueueConfig.MaxSamplesPerSend)
-	m.seriesLabels = refSeriesToLabelsProto(series)
+	m.StoreSeries(series, 0)
 	m.Start()
 
 	// Append blocks to guarantee delivery, so we do it in the background.
@@ -185,7 +186,7 @@ func TestSeriesReset(t *testing.T) {
 	for i := 0; i < numSegments; i++ {
 		series := []tsdb.RefSeries{}
 		for j := 0; j < numSeries; j++ {
-			series = append(series, tsdb.RefSeries{Ref: uint64((i * 100) + j), Labels: labels.Labels{labels.Label{Name: "a", Value: "a"}}})
+			series = append(series, tsdb.RefSeries{Ref: uint64((i * 100) + j), Labels: tsdbLabels.Labels{{Name: "a", Value: "a"}}})
 		}
 		m.StoreSeries(series, i)
 	}
@@ -210,7 +211,7 @@ func TestReshard(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	m := NewQueueManager(nil, dir, newEWMARate(ewmaWeight, shardUpdateDuration), cfg, nil, nil, c, defaultFlushDeadline)
-	m.seriesLabels = refSeriesToLabelsProto(series)
+	m.StoreSeries(series, 0)
 
 	m.Start()
 	defer m.Stop()
@@ -232,6 +233,30 @@ func TestReshard(t *testing.T) {
 	c.waitForExpectedSamples(t)
 }
 
+func TestReshardRaceWithStop(t *testing.T) {
+	c := NewTestStorageClient()
+	var m *QueueManager
+	h := sync.Mutex{}
+
+	h.Lock()
+
+	go func() {
+		for {
+			m = NewQueueManager(nil, "", newEWMARate(ewmaWeight, shardUpdateDuration), config.DefaultQueueConfig, nil, nil, c, defaultFlushDeadline)
+			m.Start()
+			h.Unlock()
+			h.Lock()
+			m.Stop()
+		}
+	}()
+
+	for i := 1; i < 100; i++ {
+		h.Lock()
+		m.reshardChan <- i
+		h.Unlock()
+	}
+}
+
 func createTimeseries(n int) ([]tsdb.RefSample, []tsdb.RefSeries) {
 	samples := make([]tsdb.RefSample, 0, n)
 	series := make([]tsdb.RefSeries, 0, n)
@@ -244,7 +269,7 @@ func createTimeseries(n int) ([]tsdb.RefSample, []tsdb.RefSeries) {
 		})
 		series = append(series, tsdb.RefSeries{
 			Ref:    uint64(i),
-			Labels: labels.Labels{labels.Label{Name: "__name__", Value: name}},
+			Labels: tsdbLabels.Labels{{Name: "__name__", Value: name}},
 		})
 	}
 	return samples, series
@@ -257,19 +282,6 @@ func getSeriesNameFromRef(r tsdb.RefSeries) string {
 		}
 	}
 	return ""
-}
-
-func refSeriesToLabelsProto(series []tsdb.RefSeries) map[uint64][]prompb.Label {
-	result := make(map[uint64][]prompb.Label)
-	for _, s := range series {
-		for _, l := range s.Labels {
-			result[s.Ref] = append(result[s.Ref], prompb.Label{
-				Name:  l.Name,
-				Value: l.Value,
-			})
-		}
-	}
-	return result
 }
 
 type TestStorageClient struct {
@@ -406,5 +418,36 @@ func BenchmarkStartup(b *testing.B) {
 		m.watcher.maxSegment = segments[len(segments)-2]
 		err := m.watcher.run()
 		testutil.Ok(b, err)
+	}
+}
+
+func TestProcessExternalLabels(t *testing.T) {
+	for _, tc := range []struct {
+		labels         tsdbLabels.Labels
+		externalLabels labels.Labels
+		expected       labels.Labels
+	}{
+		// Test adding labels at the end.
+		{
+			labels:         tsdbLabels.Labels{{Name: "a", Value: "b"}},
+			externalLabels: labels.Labels{{Name: "c", Value: "d"}},
+			expected:       labels.Labels{{Name: "a", Value: "b"}, {Name: "c", Value: "d"}},
+		},
+
+		// Test adding labels at the beginning.
+		{
+			labels:         tsdbLabels.Labels{{Name: "c", Value: "d"}},
+			externalLabels: labels.Labels{{Name: "a", Value: "b"}},
+			expected:       labels.Labels{{Name: "a", Value: "b"}, {Name: "c", Value: "d"}},
+		},
+
+		// Test we don't override existing labels.
+		{
+			labels:         tsdbLabels.Labels{{Name: "a", Value: "b"}},
+			externalLabels: labels.Labels{{Name: "a", Value: "c"}},
+			expected:       labels.Labels{{Name: "a", Value: "b"}},
+		},
+	} {
+		require.Equal(t, tc.expected, processExternalLabels(tc.labels, tc.externalLabels))
 	}
 }

@@ -25,10 +25,11 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/pkg/errors"
 
-	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
+	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
 )
 
@@ -138,7 +139,7 @@ func (m *Manager) reload() {
 }
 
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
-func (m *Manager) setJitterSeed(labels model.LabelSet) error {
+func (m *Manager) setJitterSeed(labels labels.Labels) error {
 	h := fnv.New64a()
 	hostname, err := getFqdn()
 	if err != nil {
@@ -199,7 +200,7 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	}
 
 	if failed {
-		return fmt.Errorf("failed to apply the new configuration")
+		return errors.New("failed to apply the new configuration")
 	}
 	return nil
 }
@@ -241,7 +242,7 @@ func (m *Manager) TargetsDropped() map[string][]*Target {
 	return targets
 }
 
-// getFqdn returns a fqdn if it's possible, otherwise falls back a hostname.
+// getFqdn returns a FQDN if it's possible, otherwise falls back to hostname.
 func getFqdn() (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -250,7 +251,8 @@ func getFqdn() (string, error) {
 
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		return hostname, err
+		// Return the system hostname if we can't look up the IP address.
+		return hostname, nil
 	}
 
 	lookup := func(ipStr encoding.TextMarshaler) (string, error) {
