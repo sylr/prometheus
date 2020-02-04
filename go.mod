@@ -1,4 +1,4 @@
-module github.com/prometheus/prometheus
+module github.com/prometheus/prometheus/v3
 
 go 1.13
 
@@ -43,7 +43,7 @@ require (
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58
 	golang.org/x/sys v0.0.0-20191010194322-b09406accb47
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
-	golang.org/x/tools v0.0.0-20190918214516-5a1a30219888
+	golang.org/x/tools v0.0.0-20200204074204-1cc6d1ef6c74
 	google.golang.org/api v0.8.0
 	google.golang.org/genproto v0.0.0-20190801165951-fa694d86fc64
 	google.golang.org/grpc v1.22.1
