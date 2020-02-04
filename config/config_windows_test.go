@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// +build windows
+
 package config
 
 const ruleFilesConfigFile = "testdata/rules_abs_path_windows.good.yml"

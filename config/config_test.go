@@ -701,7 +701,7 @@ func TestLoadConfigRuleFilesAbsolutePath(t *testing.T) {
 	testutil.Ok(t, err)
 
 	ruleFilesExpectedConf.original = c.original
-	testutil.Equals(t, ruleFilesExpectedConf, c)
+	testutil.Equals(t, *ruleFilesExpectedConf, *c)
 }
 
 func TestKubernetesEmptyAPIServer(t *testing.T) {
