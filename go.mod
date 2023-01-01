@@ -54,28 +54,28 @@ require (
 	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.7.0.20210223165440-c65ae3540d44
 	github.com/shurcooL/httpfs v0.0.0-20190707220628-8d4bc4ba7749
 	github.com/shurcooL/vfsgen v0.0.0-20200824052919-0d455de96546
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	github.com/uber/jaeger-lib v2.4.1+incompatible
 	go.uber.org/atomic v1.9.0
 	go.uber.org/goleak v1.1.12
-	golang.org/x/net v0.0.0-20220105145211-5b0dc2dfae98
-	golang.org/x/oauth2 v0.0.0-20211104180415-d3ed0bb246c8
-	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e
-	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
-	golang.org/x/tools v0.1.9-0.20211209172050-90a85b2969be
+	golang.org/x/net v0.3.1-0.20221206200815-1e63c2f08a10
+	golang.org/x/oauth2 v0.0.0-20220223155221-ee480838109b
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
+	golang.org/x/sys v0.3.0
+	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8
+	golang.org/x/tools v0.2.0
 	google.golang.org/api v0.64.0
 	google.golang.org/genproto v0.0.0-20211223182754-3ac035c7e7cb
-	google.golang.org/protobuf v1.27.1
+	google.golang.org/protobuf v1.28.1
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 	gopkg.in/yaml.v2 v2.4.0
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
-	k8s.io/api v0.22.4
-	k8s.io/apimachinery v0.22.4
-	k8s.io/client-go v0.22.4
+	gopkg.in/yaml.v3 v3.0.1
+	k8s.io/api v0.26.0
+	k8s.io/apimachinery v0.26.0
+	k8s.io/client-go v0.26.0
 	k8s.io/klog v1.0.0
-	k8s.io/klog/v2 v2.40.1
+	k8s.io/klog/v2 v2.80.1
 )
 
 replace (
