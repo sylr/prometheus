@@ -429,6 +429,24 @@ func (p *parser) InjectItem(typ ItemType) {
 	p.injecting = true
 }
 
+// onMatchClause accumulates the entries of an `on(...)` clause while parsing,
+// separating same-name labels (kept in labels) from renamed label pairs (kept
+// in mappings).
+type onMatchClause struct {
+	labels   []string
+	mappings []LabelMapping
+}
+
+// add records a single `on(...)` entry, routing same-name labels and renamed
+// label pairs to their respective slices.
+func (o *onMatchClause) add(m LabelMapping) {
+	if m.Left == m.Right {
+		o.labels = append(o.labels, m.Left)
+	} else {
+		o.mappings = append(o.mappings, m)
+	}
+}
+
 func (p *parser) newBinaryExpression(lhs Node, op Item, modifiers, rhs Node) *BinaryExpr {
 	ret := modifiers.(*BinaryExpr)
 
@@ -793,6 +811,36 @@ func (p *parser) checkAST(node Node) (typ ValueType) {
 			}
 		}
 
+		// Additional validation for renamed label mappings (`on(a = b)`).
+		if len(n.VectorMatching.MatchingLabelMappings) > 0 {
+			if !n.VectorMatching.On {
+				p.addParseErrf(opRange(), "label mappings are only allowed with the ON clause")
+			}
+			// A label must be unique on each side, otherwise the join is
+			// ambiguous. Same-name matching labels occupy both sides.
+			leftSlots := make(map[string]bool, len(n.VectorMatching.MatchingLabels)+len(n.VectorMatching.MatchingLabelMappings))
+			rightSlots := make(map[string]bool, len(n.VectorMatching.MatchingLabels)+len(n.VectorMatching.MatchingLabelMappings))
+			for _, l := range n.VectorMatching.MatchingLabels {
+				leftSlots[l] = true
+				rightSlots[l] = true
+			}
+			dup := func(slots map[string]bool, name, side string) {
+				if slots[name] {
+					p.addParseErrf(opRange(), "label %q must not occur more than once on the %s side of the ON clause", name, side)
+				}
+				slots[name] = true
+			}
+			for _, m := range n.VectorMatching.MatchingLabelMappings {
+				dup(leftSlots, m.Left, "left-hand")
+				dup(rightSlots, m.Right, "right-hand")
+			}
+			for _, l2 := range n.VectorMatching.Include {
+				if leftSlots[l2] || rightSlots[l2] {
+					p.addParseErrf(opRange(), "label %q must not occur in ON and GROUP clause at once", l2)
+				}
+			}
+		}
+
 		if !n.Op.IsOperator() {
 			p.addParseErrf(n.PositionRange(), "binary expression does not support operator %q", n.Op)
 		}
@@ -805,7 +853,7 @@ func (p *parser) checkAST(node Node) (typ ValueType) {
 
 		switch {
 		case (lt != ValueTypeVector || rt != ValueTypeVector) && n.VectorMatching != nil:
-			if len(n.VectorMatching.MatchingLabels) > 0 {
+			if len(n.VectorMatching.MatchingLabels) > 0 || len(n.VectorMatching.MatchingLabelMappings) > 0 {
 				p.addParseErrf(n.PositionRange(), "vector matching only allowed between instant vectors")
 			}
 			if n.VectorMatching.FillValues.LHS != nil || n.VectorMatching.FillValues.RHS != nil {

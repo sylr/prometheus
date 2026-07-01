@@ -45,6 +45,8 @@ import (
     int         int64
     uint        uint64
     float       float64
+    on_match    *onMatchClause
+    label_map   LabelMapping
 }
 
 
@@ -190,6 +192,8 @@ START_METRIC_SELECTOR
 %type <lblList> label_set_list
 %type <label> label_set_item
 %type <strings> grouping_label_list grouping_labels maybe_grouping_labels
+%type <on_match> on_matching on_label_list
+%type <label_map> on_label
 %type <series> series_item series_values
 %type <histogram> histogram_series_value
 %type <descriptors> histogram_desc_map histogram_desc_item
@@ -331,11 +335,13 @@ on_or_ignoring  : bool_modifier IGNORING grouping_labels
                         $$ = $1
                         $$.(*BinaryExpr).VectorMatching.MatchingLabels = $3
                         }
-                | bool_modifier ON grouping_labels
+                | bool_modifier ON on_matching
                         {
                         $$ = $1
-                        $$.(*BinaryExpr).VectorMatching.MatchingLabels = $3
-                        $$.(*BinaryExpr).VectorMatching.On = true
+                        vm := $$.(*BinaryExpr).VectorMatching
+                        vm.On = true
+                        vm.MatchingLabels = $3.labels
+                        vm.MatchingLabelMappings = $3.mappings
                         }
                 ;
 
@@ -405,6 +411,36 @@ grouping_labels : LEFT_PAREN grouping_label_list RIGHT_PAREN
                         { $$ = []string{} }
                 | error
                         { yylex.(*parser).unexpected("grouping opts", "\"(\""); $$ = nil }
+                ;
+
+
+/*
+ * on(...) matching labels. Unlike grouping_labels, each entry may be either a
+ * plain label (matched with the same name on both sides) or a renamed pair
+ * `left = right` (matched across differently-named labels).
+ */
+on_matching     : LEFT_PAREN on_label_list RIGHT_PAREN
+                        { $$ = $2 }
+                | LEFT_PAREN on_label_list COMMA RIGHT_PAREN
+                        { $$ = $2 }
+                | LEFT_PAREN RIGHT_PAREN
+                        { $$ = &onMatchClause{labels: []string{}} }
+                | error
+                        { yylex.(*parser).unexpected("grouping opts", "\"(\""); $$ = &onMatchClause{} }
+                ;
+
+on_label_list   : on_label_list COMMA on_label
+                        { $$ = $1; $$.add($3) }
+                | on_label
+                        { $$ = &onMatchClause{}; $$.add($1) }
+                | on_label_list error
+                        { yylex.(*parser).unexpected("grouping opts", "\",\" or \")\""); $$ = $1 }
+                ;
+
+on_label        : grouping_label
+                        { $$ = LabelMapping{Left: $1.Val, Right: $1.Val} }
+                | grouping_label EQL grouping_label
+                        { $$ = LabelMapping{Left: $1.Val, Right: $3.Val} }
                 ;
 
 

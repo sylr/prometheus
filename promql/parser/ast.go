@@ -304,13 +304,23 @@ func (vmc VectorMatchCardinality) String() string {
 	panic("promql.VectorMatchCardinality.String: unknown match cardinality")
 }
 
+// LabelMapping pairs a label on the left-hand side operand with a
+// differently-named label on the right-hand side operand for the purpose of
+// vector matching, e.g. `on(pod = pod_name)`.
+type LabelMapping struct {
+	// Left is the matching label name on the left-hand side operand.
+	Left string
+	// Right is the matching label name on the right-hand side operand.
+	Right string
+}
+
 // VectorMatching describes how elements from two Vectors in a binary
 // operation are supposed to be matched.
 type VectorMatching struct {
 	// The cardinality of the two Vectors.
 	Card VectorMatchCardinality
 	// MatchingLabels contains the labels which define equality of a pair of
-	// elements from the Vectors.
+	// elements from the Vectors. These labels have the same name on both sides.
 	MatchingLabels []string
 	// On includes the given label names from matching,
 	// rather than excluding them.
@@ -320,6 +330,11 @@ type VectorMatching struct {
 	Include []string
 	// Fill-in values to use when a series from one side does not find a match on the other side.
 	FillValues VectorMatchFillValues
+	// MatchingLabelMappings contains pairs of differently-named labels which
+	// define equality of a pair of elements from the Vectors, e.g. matching
+	// the left-hand side label "pod" against the right-hand side label
+	// "pod_name". Only valid together with On.
+	MatchingLabelMappings []LabelMapping
 }
 
 // VectorMatchFillValues contains the fill values to use for Vector matching

@@ -1222,6 +1222,58 @@ var testExpr = []struct {
 		},
 	},
 	{
+		input: "foo and on(pod = pod_name) bar",
+		expected: &BinaryExpr{
+			Op: LAND,
+			LHS: &VectorSelector{
+				Name: "foo",
+				LabelMatchers: []*labels.Matcher{
+					MustLabelMatcher(labels.MatchEqual, model.MetricNameLabel, "foo"),
+				},
+				PosRange: posrange.PositionRange{Start: 0, End: 3},
+			},
+			RHS: &VectorSelector{
+				Name: "bar",
+				LabelMatchers: []*labels.Matcher{
+					MustLabelMatcher(labels.MatchEqual, model.MetricNameLabel, "bar"),
+				},
+				PosRange: posrange.PositionRange{Start: 27, End: 30},
+			},
+			VectorMatching: &VectorMatching{
+				Card:                  CardManyToMany,
+				On:                    true,
+				MatchingLabelMappings: []LabelMapping{{Left: "pod", Right: "pod_name"}},
+			},
+		},
+	},
+	{
+		input: "foo * on(instance, pod = pod_name) group_left(x) bar",
+		expected: &BinaryExpr{
+			Op: MUL,
+			LHS: &VectorSelector{
+				Name: "foo",
+				LabelMatchers: []*labels.Matcher{
+					MustLabelMatcher(labels.MatchEqual, model.MetricNameLabel, "foo"),
+				},
+				PosRange: posrange.PositionRange{Start: 0, End: 3},
+			},
+			RHS: &VectorSelector{
+				Name: "bar",
+				LabelMatchers: []*labels.Matcher{
+					MustLabelMatcher(labels.MatchEqual, model.MetricNameLabel, "bar"),
+				},
+				PosRange: posrange.PositionRange{Start: 49, End: 52},
+			},
+			VectorMatching: &VectorMatching{
+				Card:                  CardManyToOne,
+				MatchingLabels:        []string{"instance"},
+				On:                    true,
+				Include:               []string{"x"},
+				MatchingLabelMappings: []LabelMapping{{Left: "pod", Right: "pod_name"}},
+			},
+		},
+	},
+	{
 		input: "foo and ignoring(test,blub) bar",
 		expected: &BinaryExpr{
 			Op: LAND,
@@ -5428,6 +5480,40 @@ func TestParseExpressions(t *testing.T) {
 					require.LessOrEqual(t, e.PositionRange.End, posrange.Pos(len(test.input)), "parse error is not contained in input\nExpression '%s'\nError: %v", test.input, e)
 				}
 			}
+		})
+	}
+}
+
+func TestParseRenamedMatchingErrors(t *testing.T) {
+	for _, test := range []struct {
+		input  string
+		errMsg string
+	}{
+		{
+			input:  "1 + on(a = b) foo",
+			errMsg: "vector matching only allowed between instant vectors",
+		},
+		{
+			input:  "foo and ignoring(a = b) bar",
+			errMsg: `unexpected "=" in grouping opts, expected "," or ")"`,
+		},
+		{
+			input:  "foo and on(a, a = b) bar",
+			errMsg: `label "a" must not occur more than once on the left-hand side of the ON clause`,
+		},
+		{
+			input:  "foo and on(a = b, c = b) bar",
+			errMsg: `label "b" must not occur more than once on the right-hand side of the ON clause`,
+		},
+		{
+			input:  "foo * on(pod = pod_name) group_left(pod) bar",
+			errMsg: `label "pod" must not occur in ON and GROUP clause at once`,
+		},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			_, err := testParser.ParseExpr(test.input)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.errMsg)
 		})
 	}
 }

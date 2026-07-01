@@ -109,11 +109,15 @@ func writeLabels(b *bytes.Buffer, ss []string) {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		if !model.LegacyValidation.IsValidLabelName(s) {
-			b.Write(strconv.AppendQuote(b.AvailableBuffer(), s))
-		} else {
-			b.WriteString(s)
-		}
+		writeLabel(b, s)
+	}
+}
+
+func writeLabel(b *bytes.Buffer, s string) {
+	if !model.LegacyValidation.IsValidLabelName(s) {
+		b.Write(strconv.AppendQuote(b.AvailableBuffer(), s))
+	} else {
+		b.WriteString(s)
 	}
 }
 
@@ -150,13 +154,21 @@ func (node *BinaryExpr) getMatchingStr() string {
 	var b bytes.Buffer
 	vm := node.VectorMatching
 	if vm != nil {
-		if len(vm.MatchingLabels) > 0 || vm.On || vm.Card == CardManyToOne || vm.Card == CardOneToMany {
+		if len(vm.MatchingLabels) > 0 || len(vm.MatchingLabelMappings) > 0 || vm.On || vm.Card == CardManyToOne || vm.Card == CardOneToMany {
 			vmTag := "ignoring"
 			if vm.On {
 				vmTag = "on"
 			}
 			b.WriteString(" " + vmTag + " (")
 			writeLabels(&b, vm.MatchingLabels)
+			for i, m := range vm.MatchingLabelMappings {
+				if i > 0 || len(vm.MatchingLabels) > 0 {
+					b.WriteString(", ")
+				}
+				writeLabel(&b, m.Left)
+				b.WriteString(" = ")
+				writeLabel(&b, m.Right)
+			}
 			b.WriteString(")")
 			matching = b.String()
 		}
