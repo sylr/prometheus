@@ -42,6 +42,13 @@ func translateAST(node parser.Expr) any {
 	case *parser.BinaryExpr:
 		var matching any
 		if m := n.VectorMatching; m != nil {
+			labelMappings := make([]map[string]string, 0, len(m.MatchingLabelMappings))
+			for _, lm := range m.MatchingLabelMappings {
+				labelMappings = append(labelMappings, map[string]string{
+					"left":  lm.Left,
+					"right": lm.Right,
+				})
+			}
 			matching = map[string]any{
 				"card":    m.Card.String(),
 				"labels":  sanitizeList(m.MatchingLabels),
@@ -51,6 +58,7 @@ func translateAST(node parser.Expr) any {
 					"lhs": m.FillValues.LHS,
 					"rhs": m.FillValues.RHS,
 				},
+				"labelMappings": labelMappings,
 			}
 		}
 
