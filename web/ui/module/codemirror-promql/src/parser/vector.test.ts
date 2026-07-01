@@ -23,23 +23,23 @@ describe('buildVectorMatching test', () => {
   const testCases: { binaryExpr: string; expectedVectorMatching: VectorMatching }[] = [
     {
       binaryExpr: 'foo * bar',
-      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill },
+      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill, matchingLabelMappings: [] },
     },
     {
       binaryExpr: 'foo * sum',
-      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill },
+      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill, matchingLabelMappings: [] },
     },
     {
       binaryExpr: 'foo == 1',
-      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill },
+      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill, matchingLabelMappings: [] },
     },
     {
       binaryExpr: 'foo == bool 1',
-      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill },
+      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill, matchingLabelMappings: [] },
     },
     {
       binaryExpr: '2.5 / bar',
-      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill },
+      expectedVectorMatching: { card: VectorMatchCardinality.CardOneToOne, matchingLabels: [], on: false, include: [], ...noFill, matchingLabelMappings: [] },
     },
     {
       binaryExpr: 'foo and bar',
@@ -49,6 +49,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -59,6 +60,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -69,6 +71,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -81,6 +84,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -93,6 +97,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -103,6 +108,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -113,6 +119,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -123,6 +130,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -133,6 +141,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -143,6 +152,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -153,6 +163,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -163,6 +174,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: [],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -173,6 +185,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: ['bar'],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -183,6 +196,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: ['blub'],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -193,6 +207,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: ['bar'],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -203,6 +218,7 @@ describe('buildVectorMatching test', () => {
         on: true,
         include: ['bar', 'foo'],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -213,6 +229,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: ['bar', 'foo'],
         ...noFill,
+        matchingLabelMappings: [],
       },
     },
     {
@@ -223,6 +240,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         fill: { lhs: 23, rhs: 23 },
+        matchingLabelMappings: [],
       },
     },
     {
@@ -233,6 +251,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         fill: { lhs: 23, rhs: null },
+        matchingLabelMappings: [],
       },
     },
     {
@@ -243,6 +262,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         fill: { lhs: null, rhs: 23 },
+        matchingLabelMappings: [],
       },
     },
     {
@@ -253,6 +273,7 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         fill: { lhs: 23, rhs: 42 },
+        matchingLabelMappings: [],
       },
     },
     {
@@ -263,6 +284,29 @@ describe('buildVectorMatching test', () => {
         on: false,
         include: [],
         fill: { lhs: 42, rhs: 23 },
+        matchingLabelMappings: [],
+      },
+    },
+    {
+      binaryExpr: 'foo and on(pod = pod_name) bar',
+      expectedVectorMatching: {
+        card: VectorMatchCardinality.CardManyToMany,
+        matchingLabels: [],
+        on: true,
+        include: [],
+        ...noFill,
+        matchingLabelMappings: [{ left: 'pod', right: 'pod_name' }],
+      },
+    },
+    {
+      binaryExpr: 'foo * on(instance, pod = pod_name) group_left(x) bar',
+      expectedVectorMatching: {
+        card: VectorMatchCardinality.CardManyToOne,
+        matchingLabels: ['instance'],
+        on: true,
+        include: ['x'],
+        ...noFill,
+        matchingLabelMappings: [{ left: 'pod', right: 'pod_name' }],
       },
     },
   ];

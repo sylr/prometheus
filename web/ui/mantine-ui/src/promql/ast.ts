@@ -110,12 +110,24 @@ export interface FillValues {
   lhs: number | null;
   rhs: number | null;
 }
+
+// LabelMapping pairs a left-hand side label with a differently-named
+// right-hand side label, e.g. `on(pod = pod_name)`.
+export interface LabelMapping {
+  left: string;
+  right: string;
+}
+
 export interface VectorMatching {
   card: vectorMatchCardinality;
   labels: string[];
   on: boolean;
   include: string[];
   fillValues: FillValues;
+  // labelMappings contains pairs of differently-named labels matched across
+  // the two sides. Only valid with on. Optional for backwards compatibility
+  // with older servers that do not emit this field.
+  labelMappings?: LabelMapping[];
 }
 
 export type StartOrEnd = "start" | "end" | null;

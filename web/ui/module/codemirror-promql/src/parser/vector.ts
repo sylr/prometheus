@@ -18,7 +18,10 @@ import {
   BinaryExpr,
   MatchingModifierClause,
   LabelName,
+  QuotedLabelName,
+  EqlSingle,
   GroupingLabels,
+  OnGroupingLabels,
   GroupLeft,
   GroupRight,
   On,
@@ -46,14 +49,43 @@ export function buildVectorMatching(state: EditorState, binaryNode: SyntaxNode):
       lhs: null,
       rhs: null,
     },
+    matchingLabelMappings: [],
   };
   const modifierClause = binaryNode.getChild(MatchingModifierClause);
   if (modifierClause) {
     result.on = modifierClause.getChild(On) !== null;
-    const labelNode = modifierClause.getChild(GroupingLabels);
-    const labels = labelNode ? labelNode.getChildren(LabelName) : [];
-    for (const label of labels) {
-      result.matchingLabels.push(state.sliceDoc(label.from, label.to));
+    // `on(...)` uses OnGroupingLabels (which may contain renamed pairs);
+    // `ignoring(...)` uses GroupingLabels.
+    const labelNode =
+      modifierClause.getChild(OnGroupingLabels) ?? modifierClause.getChild(GroupingLabels);
+    if (labelNode) {
+      // Walk the label children in order, pairing `left = right` whenever an
+      // EqlSingle (`=`) token appears between two labels.
+      let pendingLeft: string | null = null;
+      let expectRight = false;
+      for (let child = labelNode.firstChild; child !== null; child = child.nextSibling) {
+        if (child.type.id === EqlSingle) {
+          expectRight = true;
+          continue;
+        }
+        if (child.type.id !== LabelName && child.type.id !== QuotedLabelName) {
+          continue; // Parentheses and commas.
+        }
+        const name = state.sliceDoc(child.from, child.to);
+        if (expectRight && pendingLeft !== null) {
+          result.matchingLabelMappings.push({ left: pendingLeft, right: name });
+          pendingLeft = null;
+          expectRight = false;
+          continue;
+        }
+        if (pendingLeft !== null) {
+          result.matchingLabels.push(pendingLeft);
+        }
+        pendingLeft = name;
+      }
+      if (pendingLeft !== null) {
+        result.matchingLabels.push(pendingLeft);
+      }
     }
 
     const groupLeft = modifierClause.getChild(GroupLeft);

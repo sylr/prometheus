@@ -407,6 +407,52 @@ const testCases: TestCase[] = [
     },
   },
   {
+    // left_metric * on(pod = pod_name) group_left(region) right_metric
+    desc: "one-to-one matching on differently-named labels",
+    op: binaryOperatorType.mul,
+    matching: {
+      card: vectorMatchCardinality.oneToOne,
+      on: true,
+      include: [],
+      labels: [],
+      fillValues: { lhs: null, rhs: null },
+      labelMappings: [{ left: "pod", right: "pod_name" }],
+    },
+    lhs: [{ metric: { __name__: "left_metric", pod: "a" }, value: [0, "1"] }],
+    rhs: [
+      {
+        metric: { __name__: "right_metric", pod_name: "a", region: "eu" },
+        value: [0, "10"],
+      },
+    ],
+    result: {
+      groups: {
+        [fnv1a(["a"])]: {
+          groupLabels: { pod_name: "a" },
+          lhs: [
+            { metric: { __name__: "left_metric", pod: "a" }, value: [0, "1"] },
+          ],
+          lhsCount: 1,
+          rhs: [
+            {
+              metric: { __name__: "right_metric", pod_name: "a", region: "eu" },
+              value: [0, "10"],
+            },
+          ],
+          rhsCount: 1,
+          result: [
+            {
+              sample: { metric: { pod: "a" }, value: [0, "10"] },
+              manySideIdx: 0,
+            },
+          ],
+          error: null,
+        },
+      },
+      numGroups: 1,
+    },
+  },
+  {
     // metric_a - ignoring(same) metric_b
     desc: "one-to-one matching ignoring explicit labels",
     op: binaryOperatorType.sub,

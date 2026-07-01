@@ -82,7 +82,7 @@ PromQL(
       Div,
         MatchingModifierClause(
           On,
-          GroupingLabels(
+          OnGroupingLabels(
               LabelName
           )
           GroupLeft
@@ -138,7 +138,7 @@ PromQL(
       Div,
         MatchingModifierClause(
           On,
-          GroupingLabels(
+          OnGroupingLabels(
               QuotedLabelName(StringLiteral)
           )
           GroupLeft
@@ -441,7 +441,7 @@ PromQL(
       Add,
         MatchingModifierClause(
           On,
-          GroupingLabels(
+          OnGroupingLabels(
               LabelName
           )
           GroupLeft,
@@ -904,3 +904,17 @@ PromQL(
     VectorSelector(Identifier)
   )
 )
+
+# Vector matching on differently-named labels
+
+foo and on(pod = pod_name) bar
+
+==>
+PromQL(BinaryExpr(VectorSelector(Identifier),And,MatchingModifierClause(On,OnGroupingLabels(LabelName,EqlSingle,LabelName)),VectorSelector(Identifier)))
+
+# Vector matching mixing plain labels and renamed pairs
+
+foo * on(instance, pod = pod_name) group_left(x) bar
+
+==>
+PromQL(BinaryExpr(VectorSelector(Identifier),Mul,MatchingModifierClause(On,OnGroupingLabels(LabelName,LabelName,EqlSingle,LabelName),GroupLeft,GroupingLabels(LabelName)),VectorSelector(Identifier)))

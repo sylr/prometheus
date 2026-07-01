@@ -1050,6 +1050,50 @@ describe("serializeNode and formatNode", () => {
     {"metric_ü"}
   )`,
       },
+      // Vector matching on differently-named labels.
+      {
+        node: {
+          type: nodeType.binaryExpr,
+          op: binaryOperatorType.add,
+          lhs: { type: nodeType.placeholder, children: [] },
+          rhs: { type: nodeType.placeholder, children: [] },
+          matching: {
+            card: vectorMatchCardinality.oneToOne,
+            labels: [],
+            on: true,
+            include: [],
+            fillValues: { lhs: null, rhs: null },
+            labelMappings: [{ left: "pod", right: "pod_name" }],
+          },
+          bool: false,
+        },
+        output: "… + on(pod = pod_name) …",
+        prettyOutput: `  …
++ on(pod = pod_name)
+  …`,
+      },
+      {
+        // Mixing a plain label and a renamed pair, with group_left.
+        node: {
+          type: nodeType.binaryExpr,
+          op: binaryOperatorType.mul,
+          lhs: { type: nodeType.placeholder, children: [] },
+          rhs: { type: nodeType.placeholder, children: [] },
+          matching: {
+            card: vectorMatchCardinality.manyToOne,
+            labels: ["instance"],
+            on: true,
+            include: ["x"],
+            fillValues: { lhs: null, rhs: null },
+            labelMappings: [{ left: "pod", right: "pod_name" }],
+          },
+          bool: false,
+        },
+        output: "… * on(instance, pod = pod_name) group_left(x) …",
+        prettyOutput: `  …
+* on(instance, pod = pod_name) group_left(x)
+  …`,
+      },
     ];
 
     tests.forEach((t) => {

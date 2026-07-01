@@ -136,6 +136,46 @@ const matchLabels = (metric: Metric, on: boolean, labels: string[]): Metric => {
   return result;
 };
 
+// Whether the matching uses renamed label mappings (`on(a = b)`).
+const hasLabelMappings = (matching: VectorMatching): boolean =>
+  matching.on && (matching.labelMappings?.length ?? 0) > 0;
+
+// canonicalMatchNames builds the per-side label name lists for renamed
+// matching, in a shared canonical order (sorted by left name) so that both
+// sides produce equal signatures when the matched values are equal. Same-name
+// matching labels are treated as {left: n, right: n} pairs.
+const canonicalMatchNames = (
+  matching: VectorMatching
+): { leftNames: string[]; rightNames: string[] } => {
+  const pairs = matching.labels.map((l) => ({ left: l, right: l }));
+  (matching.labelMappings ?? []).forEach((m) =>
+    pairs.push({ left: m.left, right: m.right })
+  );
+  pairs.sort((a, b) => (a.left < b.left ? -1 : a.left > b.left ? 1 : 0));
+  return {
+    leftNames: pairs.map((p) => p.left),
+    rightNames: pairs.map((p) => p.right),
+  };
+};
+
+// valueSignatureFunc returns a signature function over the given label names,
+// in the provided order (no re-sorting, so the two sides stay aligned).
+const valueSignatureFunc = (names: string[]) => {
+  return (lset: Metric): string => fnv1a(names.map((n) => lset[n]));
+};
+
+// matchGroupLabels returns only the given (side-specific) matching labels of a
+// metric, for display of renamed match groups.
+const matchGroupLabels = (metric: Metric, names: string[]): Metric => {
+  const result: Metric = {};
+  names.forEach((n) => {
+    if (n in metric) {
+      result[n] = metric[n];
+    }
+  });
+  return result;
+};
+
 export const scalarBinOp = (
   op: binaryOperatorType,
   lhs: number,
@@ -220,9 +260,13 @@ export const resultMetric = (
   // Keep only match group labels for 1:1 matches.
   if (matching.card === vectorMatchCardinality.oneToOne) {
     if (matching.on) {
+      // The result is built from the LHS, so keep the "on" labels plus the
+      // left-hand names of any renamed mappings.
+      const keep = new Set(matching.labels);
+      (matching.labelMappings ?? []).forEach((m) => keep.add(m.left));
       // Drop all labels that are not in the "on" clause.
       for (const name in result) {
-        if (!matching.labels.includes(name)) {
+        if (!keep.has(name)) {
           delete result[name];
         }
       }
@@ -268,15 +312,31 @@ export const computeVectorVectorBinOp = (
     maxSeriesPerGroup?: number;
   }
 ): BinOpResult => {
+  // Per-side signature and match-label functions. For same-name matching both
+  // sides are identical; for renamed matching (`on(a = b)`) each side reads its
+  // own label names in a shared canonical order.
+  const renamed = hasLabelMappings(matching);
+  const { leftNames, rightNames } = renamed
+    ? canonicalMatchNames(matching)
+    : { leftNames: [], rightNames: [] };
+  let sigfLhs = renamed
+    ? valueSignatureFunc(leftNames)
+    : signatureFunc(matching.on, matching.labels);
+  let sigfRhs = renamed ? valueSignatureFunc(rightNames) : sigfLhs;
+  let namesLhs = leftNames;
+  let namesRhs = rightNames;
+
   // For the simplification of further calculations, we assume that the "one" side of a one-to-many match
   // is always the right-hand side of the binop and swap otherwise to ensure this. We swap back in the end.
-  [lhs, rhs] =
-    matching.card === vectorMatchCardinality.oneToMany
-      ? [rhs, lhs]
-      : [lhs, rhs];
+  // The per-side signature/label functions are swapped together with the operands so they stay attached
+  // to their original side.
+  if (matching.card === vectorMatchCardinality.oneToMany) {
+    [lhs, rhs] = [rhs, lhs];
+    [sigfLhs, sigfRhs] = [sigfRhs, sigfLhs];
+    [namesLhs, namesRhs] = [namesRhs, namesLhs];
+  }
 
   const groups: BinOpMatchGroups = {};
-  const sigf = signatureFunc(matching.on, matching.labels);
 
   // While we only use this set to compute a count of limited groups in the end, we can encounter each
   // group multiple times (since multiple series can map to the same group). So we need to use a set
@@ -285,7 +345,7 @@ export const computeVectorVectorBinOp = (
 
   // Add all RHS samples to the grouping map.
   rhs.forEach((rs) => {
-    const sig = sigf(rs.metric);
+    const sig = sigfRhs(rs.metric);
 
     if (!(sig in groups)) {
       if (limits?.maxGroups && Object.keys(groups).length >= limits.maxGroups) {
@@ -294,7 +354,9 @@ export const computeVectorVectorBinOp = (
       }
 
       groups[sig] = {
-        groupLabels: matchLabels(rs.metric, matching.on, matching.labels),
+        groupLabels: renamed
+          ? matchGroupLabels(rs.metric, namesRhs)
+          : matchLabels(rs.metric, matching.on, matching.labels),
         lhs: [],
         lhsCount: 0,
         rhs: [],
@@ -315,7 +377,7 @@ export const computeVectorVectorBinOp = (
 
   // Add all LHS samples to the grouping map.
   lhs.forEach((ls) => {
-    const sig = sigf(ls.metric);
+    const sig = sigfLhs(ls.metric);
 
     if (!(sig in groups)) {
       if (limits?.maxGroups && Object.keys(groups).length >= limits.maxGroups) {
@@ -324,7 +386,9 @@ export const computeVectorVectorBinOp = (
       }
 
       groups[sig] = {
-        groupLabels: matchLabels(ls.metric, matching.on, matching.labels),
+        groupLabels: renamed
+          ? matchGroupLabels(ls.metric, namesLhs)
+          : matchLabels(ls.metric, matching.on, matching.labels),
         lhs: [],
         lhsCount: 0,
         rhs: [],

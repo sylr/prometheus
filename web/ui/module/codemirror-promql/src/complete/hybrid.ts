@@ -27,6 +27,7 @@ import {
   EqlSingle,
   FunctionCallBody,
   GroupingLabels,
+  OnGroupingLabels,
   Gte,
   Gtr,
   LabelMatchers,
@@ -225,6 +226,7 @@ export function computeEndCompletePosition(state: EditorState, node: SyntaxNode,
   if (
     node.type.id === LabelMatchers ||
     node.type.id === GroupingLabels ||
+    node.type.id === OnGroupingLabels ||
     node.type.id === FunctionCallBody ||
     node.type.id === MatrixSelector ||
     node.type.id === SubqueryExpr
@@ -279,7 +281,7 @@ export function computeStartCompletePosition(state: EditorState, node: SyntaxNod
   let start = node.from;
   if (isAfterClosedFunctionCallBody(state, node, pos)) {
     start = pos;
-  } else if (node.type.id === LabelMatchers || node.type.id === GroupingLabels) {
+  } else if (node.type.id === LabelMatchers || node.type.id === GroupingLabels || node.type.id === OnGroupingLabels) {
     start = computeStartCompleteLabelPositionInLabelMatcherOrInGroupingLabel(node, pos);
   } else if (
     (node.type.id === FunctionCallBody && node.firstChild === null) ||
@@ -504,8 +506,9 @@ export function analyzeCompletion(state: EditorState, node: SyntaxNode, pos: num
       }
       break;
     case GroupingLabels:
+    case OnGroupingLabels:
       // In this case we are in the given situation:
-      //      sum by () or sum (metric_name) by ()
+      //      sum by () or sum (metric_name) by () or foo * on () bar
       // so we have or to autocomplete any kind of labelName or to autocomplete only the labelName associated to the metric
       result.push({ kind: ContextKind.LabelName, metricName: getMetricNameInGroupBy(node, state) });
       break;
@@ -522,7 +525,7 @@ export function analyzeCompletion(state: EditorState, node: SyntaxNode, pos: num
       break;
     }
     case LabelName:
-      if (node.parent?.type.id === GroupingLabels) {
+      if (node.parent?.type.id === GroupingLabels || node.parent?.type.id === OnGroupingLabels) {
         // In this case we are in the given situation:
         //      sum by (myL)
         // So we have to continue to autocomplete any kind of labelName
@@ -571,7 +574,7 @@ export function analyzeCompletion(state: EditorState, node: SyntaxNode, pos: num
           labelName: labelName,
           matchers: labelMatchers,
         });
-      } else if (node.parent?.parent?.type.id === GroupingLabels) {
+      } else if (node.parent?.parent?.type.id === GroupingLabels || node.parent?.parent?.type.id === OnGroupingLabels) {
         // In this case we are in the given situation:
         //      sum by ("myL")
         // So we have to continue to autocomplete any kind of labelName

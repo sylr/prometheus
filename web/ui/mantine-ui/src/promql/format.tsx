@@ -7,6 +7,7 @@ import ASTNode, {
   StartOrEnd,
   MatrixSelector,
   DurationNode,
+  LabelMapping,
 } from "./ast";
 import { formatPrometheusDuration } from "../lib/formatTime";
 import {
@@ -92,6 +93,36 @@ export const labelNameList = (labels: string[]): React.ReactNode[] => {
       </span>
     );
   });
+};
+
+// matchingLabelList renders the on()/ignoring() label list, including any
+// renamed label mappings (`left = right`) mixed with plain labels.
+export const matchingLabelList = (
+  labels: string[],
+  mappings: LabelMapping[]
+): React.ReactNode[] => {
+  const items: React.ReactNode[] = labels.map((l) => (
+    <span className="promql-code promql-label-name">{maybeQuoteLabelName(l)}</span>
+  ));
+  mappings.forEach((m) => {
+    items.push(
+      <span>
+        <span className="promql-code promql-label-name">
+          {maybeQuoteLabelName(m.left)}
+        </span>
+        {" = "}
+        <span className="promql-code promql-label-name">
+          {maybeQuoteLabelName(m.right)}
+        </span>
+      </span>
+    );
+  });
+  return items.map((it, i) => (
+    <span key={i}>
+      {i !== 0 && ", "}
+      {it}
+    </span>
+  ));
 };
 
 const formatAtAndOffset = (
@@ -364,8 +395,10 @@ const formatNodeInternal = (
       let fill = <></>;
       const vm = node.matching;
       if (vm !== null) {
+        const mappings = vm.labelMappings ?? [];
         if (
           vm.labels.length > 0 ||
+          mappings.length > 0 ||
           vm.on ||
           vm.card === vectorMatchCardinality.manyToOne ||
           vm.card === vectorMatchCardinality.oneToMany
@@ -377,7 +410,7 @@ const formatNodeInternal = (
                 {vm.on ? "on" : "ignoring"}
               </span>
               <span className="promql-paren">(</span>
-              {labelNameList(vm.labels)}
+              {matchingLabelList(vm.labels, mappings)}
               <span className="promql-paren">)</span>
             </>
           );

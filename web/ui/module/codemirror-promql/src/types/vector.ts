@@ -23,11 +23,18 @@ export interface FillValues {
   rhs: number | null;
 }
 
+// LabelMapping pairs a left-hand side label with a differently-named
+// right-hand side label, e.g. `on(pod = pod_name)`.
+export interface LabelMapping {
+  left: string;
+  right: string;
+}
+
 export interface VectorMatching {
   // The cardinality of the two Vectors.
   card: VectorMatchCardinality;
   // MatchingLabels contains the labels which define equality of a pair of
-  // elements from the Vectors.
+  // elements from the Vectors. These labels have the same name on both sides.
   matchingLabels: string[];
   // On includes the given label names from matching,
   // rather than excluding them.
@@ -37,4 +44,7 @@ export interface VectorMatching {
   include: string[];
   // Fill contains optional fill values for missing elements.
   fill: FillValues;
+  // MatchingLabelMappings contains pairs of differently-named labels which
+  // define equality of a pair of elements from the Vectors. Only valid with on.
+  matchingLabelMappings: LabelMapping[];
 }

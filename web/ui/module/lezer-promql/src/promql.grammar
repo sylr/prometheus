@@ -99,7 +99,7 @@ BinaryExpr {
 }
 
 MatchingModifierClause {
-  (Ignoring | On) GroupingLabels
+  (Ignoring GroupingLabels | On OnGroupingLabels)
   ((GroupLeft | GroupRight) (!group GroupingLabels)?)?
 }
 
@@ -131,6 +131,18 @@ binModifiers {
 
 GroupingLabels {
   "(" ((LabelName | QuotedLabelName) ("," (LabelName | QuotedLabelName))* ","?)? ")"
+}
+
+// OnGroupingLabels is like GroupingLabels but, additionally, each entry may be
+// a renamed pair `left = right` for matching on differently-named labels, e.g.
+// `on(pod = pod_name)`. It is used only after the `on` keyword. onGroupingLabel
+// is inlined (lowercase) so LabelName/QuotedLabelName stay as direct children.
+OnGroupingLabels {
+  "(" (onGroupingLabel ("," onGroupingLabel)* ","?)? ")"
+}
+
+onGroupingLabel {
+  (LabelName | QuotedLabelName) (EqlSingle (LabelName | QuotedLabelName))?
 }
 
 FunctionCall {

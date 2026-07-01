@@ -177,13 +177,21 @@ const serializeNode = (
       let fill = "";
       const vm = node.matching;
       if (vm !== null) {
+        const mappings = vm.labelMappings ?? [];
         if (
           vm.labels.length > 0 ||
+          mappings.length > 0 ||
           vm.on ||
           vm.card === vectorMatchCardinality.manyToOne ||
           vm.card === vectorMatchCardinality.oneToMany
         ) {
-          matching = ` ${vm.on ? "on" : "ignoring"}(${labelNameList(vm.labels)})`;
+          const parts = vm.labels.map((ln) => maybeQuoteLabelName(ln));
+          for (const m of mappings) {
+            parts.push(
+              `${maybeQuoteLabelName(m.left)} = ${maybeQuoteLabelName(m.right)}`
+            );
+          }
+          matching = ` ${vm.on ? "on" : "ignoring"}(${parts.join(", ")})`;
         }
 
         if (

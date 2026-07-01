@@ -10,7 +10,11 @@ import {
   filteredSampleValue,
   MaybeFilledInstantSample,
 } from "../../../../promql/binOp";
-import { formatNode, labelNameList } from "../../../../promql/format";
+import {
+  formatNode,
+  labelNameList,
+  matchingLabelList,
+} from "../../../../promql/format";
 import {
   Alert,
   Anchor,
@@ -145,15 +149,22 @@ const explanationText = (node: BinaryExpr): React.ReactNode => {
         )}
       </Text>
       <List my="md" fz="sm" withPadding>
-        {(matching.labels.length > 0 || matching.on) &&
+        {(matching.labels.length > 0 ||
+          (matching.labelMappings?.length ?? 0) > 0 ||
+          matching.on) &&
           (matching.on ? (
             <List.Item>
               <span className="promql-code promql-keyword">on</span>(
-              {labelNameList(matching.labels)}):{" "}
-              {matching.labels.length > 0 ? (
+              {matchingLabelList(matching.labels, matching.labelMappings ?? [])}
+              ):{" "}
+              {matching.labels.length > 0 ||
+              (matching.labelMappings?.length ?? 0) > 0 ? (
                 <>
                   series on both sides are matched on the labels{" "}
-                  {labelNameList(matching.labels)}
+                  {matchingLabelList(
+                    matching.labels,
+                    matching.labelMappings ?? []
+                  )}
                 </>
               ) : (
                 <>
