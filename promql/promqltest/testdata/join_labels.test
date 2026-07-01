@@ -1,0 +1,63 @@
+# Tests for vector matching on differently-named labels: on(left = right).
+
+load 5m
+  kube_pod{pod="a"} 1
+  kube_pod{pod="b"} 2
+  kube_pod{pod="c"} 3
+  app{pod_name="a",region="eu"} 10
+  app{pod_name="b",region="us"} 20
+  app{pod_name="d",region="ap"} 40
+
+# and: keep left series whose pod matches a right pod_name.
+eval instant at 0m kube_pod and on(pod = pod_name) app
+  kube_pod{pod="a"} 1
+  kube_pod{pod="b"} 2
+
+# unless: keep left series with no matching right series.
+eval instant at 0m kube_pod unless on(pod = pod_name) app
+  kube_pod{pod="c"} 3
+
+# or: all left series plus right series with no left match.
+eval instant at 0m kube_pod or on(pod = pod_name) app
+  kube_pod{pod="a"} 1
+  kube_pod{pod="b"} 2
+  kube_pod{pod="c"} 3
+  app{pod_name="d",region="ap"} 40
+
+# arithmetic with group_left pulling a label across the renamed join.
+eval instant at 0m kube_pod * on(pod = pod_name) group_left(region) app
+  {pod="a",region="eu"} 10
+  {pod="b",region="us"} 40
+
+# one-to-one arithmetic keeps only the (left) matching label.
+eval instant at 0m kube_pod + on(pod = pod_name) app
+  {pod="a"} 11
+  {pod="b"} 22
+
+# group_right: result takes the many-side (kube_pod) labels.
+eval instant at 0m app * on(pod_name = pod) group_right() kube_pod
+  {pod="a"} 10
+  {pod="b"} 40
+
+# Mixing a plain label with a renamed pair.
+clear
+
+load 5m
+  left_metric{env="prod",pod="a"} 1
+  left_metric{env="dev",pod="a"} 2
+  right_metric{env="prod",pod_name="a"} 100
+  right_metric{env="dev",pod_name="a"} 200
+
+eval instant at 0m left_metric * on(env, pod = pod_name) right_metric
+  {env="prod",pod="a"} 100
+  {env="dev",pod="a"} 400
+
+# Absent join labels match absent (parity with standard on()).
+clear
+
+load 5m
+  no_pod_left{x="1"} 5
+  no_pod_right{y="2"} 7
+
+eval instant at 0m no_pod_left and on(pod = pod_name) no_pod_right
+  no_pod_left{x="1"} 5

@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -1401,6 +1402,76 @@ func (enh *EvalNodeHelper) getOrCreateLblsWithQuantile(lbls labels.Labels, quant
 	return cachedLblsWithQuantile
 }
 
+// renamedMatchSignatures returns per-side join-signature functions for a vector
+// matching that contains renamed label mappings (`on(a = b)`). The left
+// function reads the left-hand label names and the right function the
+// right-hand names, in a shared canonical order, so that two series match iff
+// their matched label values are pairwise equal.
+func renamedMatchSignatures(matching *parser.VectorMatching) (left, right func(labels.Labels) string) {
+	pairs := make([]parser.LabelMapping, 0, len(matching.MatchingLabels)+len(matching.MatchingLabelMappings))
+	for _, l := range matching.MatchingLabels {
+		pairs = append(pairs, parser.LabelMapping{Left: l, Right: l})
+	}
+	pairs = append(pairs, matching.MatchingLabelMappings...)
+	// Sort by the left name (unique per validation) so both sides iterate the
+	// same pair sequence.
+	slices.SortFunc(pairs, func(a, b parser.LabelMapping) int {
+		return strings.Compare(a.Left, b.Left)
+	})
+
+	leftNames := make([]string, len(pairs))
+	rightNames := make([]string, len(pairs))
+	for i, p := range pairs {
+		leftNames[i] = p.Left
+		rightNames[i] = p.Right
+	}
+	return valueSignatureFunc(leftNames), valueSignatureFunc(rightNames)
+}
+
+// valueSignatureFunc returns a function that builds a join signature from the
+// values of the given label names, in order. Each entry is encoded as a
+// presence byte followed by a uvarint length-prefixed value, so that an absent
+// label never collides with a present empty value and value boundaries are
+// unambiguous.
+func valueSignatureFunc(names []string) func(labels.Labels) string {
+	buf := make([]byte, 0, 1024)
+	return func(lset labels.Labels) string {
+		b := buf[:0]
+		for _, n := range names {
+			if !lset.Has(n) {
+				b = append(b, 0)
+				continue
+			}
+			v := lset.Get(n)
+			b = append(b, 1)
+			b = binary.AppendUvarint(b, uint64(len(v)))
+			b = append(b, v...)
+		}
+		buf = b
+		return string(b)
+	}
+}
+
+// matchGroupLabels returns the labels identifying the match group of a series
+// from the "one" side of a many-to-one/one-to-many operation, for use in error
+// messages. It accounts for renamed label mappings: the one side is the RHS for
+// one-to-one/many-to-one and the (swapped-in) LHS for one-to-many.
+func matchGroupLabels(metric labels.Labels, matching *parser.VectorMatching) labels.Labels {
+	if len(matching.MatchingLabelMappings) == 0 {
+		return metric.MatchLabels(matching.On, matching.MatchingLabels...)
+	}
+	names := make([]string, 0, len(matching.MatchingLabels)+len(matching.MatchingLabelMappings))
+	names = append(names, matching.MatchingLabels...)
+	for _, m := range matching.MatchingLabelMappings {
+		if matching.Card == parser.CardOneToMany {
+			names = append(names, m.Left)
+		} else {
+			names = append(names, m.Right)
+		}
+	}
+	return metric.MatchLabels(true, names...)
+}
+
 // rangeEval evaluates the given expressions, and then for each step calls
 // the given funcCall with the values computed for each expression at that
 // step. The return value is the combination into time series of all the
@@ -1454,22 +1525,40 @@ func (ev *evaluator) rangeEval(ctx context.Context, matching *parser.VectorMatch
 	)
 
 	if useSignatures {
-		var (
-			// Function to compute the join signature for each series.
-			sigf  func(labels.Labels) string
-			buf   = make([]byte, 0, 1024)
-			names = slices.Clone(matching.MatchingLabels)
-		)
-		if matching.On {
-			slices.Sort(names)
-			sigf = func(lset labels.Labels) string {
-				return string(lset.BytesWithLabels(buf, names...))
+		// sigf computes the join signature for a series of the exprIdx-th
+		// operand (0 == LHS, 1 == RHS). For same-name matching the signature
+		// is identical on both sides; for renamed matching (`on(a = b)`) each
+		// side reads its own label names but produces equal bytes when the
+		// matched values are equal.
+		var sigf func(exprIdx int, lset labels.Labels) string
+		if len(matching.MatchingLabelMappings) > 0 {
+			sigfLeft, sigfRight := renamedMatchSignatures(matching)
+			sigf = func(exprIdx int, lset labels.Labels) string {
+				if exprIdx == 0 {
+					return sigfLeft(lset)
+				}
+				return sigfRight(lset)
 			}
-		} else { // "without"
-			names = append([]string{labels.MetricName}, names...)
-			slices.Sort(names)
-			sigf = func(lset labels.Labels) string {
-				return string(lset.BytesWithoutLabels(buf, names...))
+		} else {
+			var (
+				base  func(labels.Labels) string
+				buf   = make([]byte, 0, 1024)
+				names = slices.Clone(matching.MatchingLabels)
+			)
+			if matching.On {
+				slices.Sort(names)
+				base = func(lset labels.Labels) string {
+					return string(lset.BytesWithLabels(buf, names...))
+				}
+			} else { // "without"
+				names = append([]string{labels.MetricName}, names...)
+				slices.Sort(names)
+				base = func(lset labels.Labels) string {
+					return string(lset.BytesWithoutLabels(buf, names...))
+				}
+			}
+			sigf = func(_ int, lset labels.Labels) string {
+				return base(lset)
 			}
 		}
 
@@ -1483,7 +1572,7 @@ func (ev *evaluator) rangeEval(ctx context.Context, matching *parser.VectorMatch
 			bufHelpers[i] = make([]EvalSeriesHelper, len(matrixes[i]))
 
 			for si, series := range matrixes[i] {
-				strSig := sigf(series.Metric)
+				strSig := sigf(i, series.Metric)
 
 				if sigOrd, ok := signatureToOrdinal[strSig]; ok {
 					seriesHelpers[i][si] = EvalSeriesHelper{sigOrdinal: sigOrd}
@@ -3194,7 +3283,7 @@ func (ev *evaluator) VectorBinop(op parser.ItemType, lhs, rhs Vector, matching *
 			if matching.Card == parser.CardOneToMany {
 				oneSide = "left"
 			}
-			matchedLabels := rs.Metric.MatchLabels(matching.On, matching.MatchingLabels...)
+			matchedLabels := matchGroupLabels(rs.Metric, matching)
 			// Many-to-many matching not allowed.
 			ev.errorf("found duplicate series for the match group %s on the %s hand-side of the operation: [%s, %s]"+
 				";many-to-many matching not allowed: matching labels must be unique on one side", matchedLabels.String(), oneSide, rs.Metric.String(), duplSample.Metric.String())
@@ -3353,10 +3442,20 @@ func resultMetric(lhs, rhs labels.Labels, op parser.ItemType, matching *parser.V
 	}
 
 	if matching.Card == parser.CardOneToOne {
-		if matching.On {
-			enh.lb.Keep(matching.MatchingLabels...)
-		} else {
+		switch {
+		case !matching.On:
 			enh.lb.Del(matching.MatchingLabels...)
+		case len(matching.MatchingLabelMappings) == 0:
+			enh.lb.Keep(matching.MatchingLabels...)
+		default:
+			// The result is built from the LHS (one-to-one never swaps), so
+			// keep the left-hand names of the renamed mappings.
+			keep := make([]string, 0, len(matching.MatchingLabels)+len(matching.MatchingLabelMappings))
+			keep = append(keep, matching.MatchingLabels...)
+			for _, m := range matching.MatchingLabelMappings {
+				keep = append(keep, m.Left)
+			}
+			enh.lb.Keep(keep...)
 		}
 	}
 	for _, ln := range matching.Include {
