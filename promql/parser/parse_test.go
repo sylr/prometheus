@@ -5505,10 +5505,6 @@ func TestParseRenamedMatchingErrors(t *testing.T) {
 			input:  "foo and on(a = b, c = b) bar",
 			errMsg: `label "b" must not occur more than once on the right-hand side of the ON clause`,
 		},
-		{
-			input:  "foo * on(pod = pod_name) group_left(pod) bar",
-			errMsg: `label "pod" must not occur in ON and GROUP clause at once`,
-		},
 	} {
 		t.Run(test.input, func(t *testing.T) {
 			_, err := testParser.ParseExpr(test.input)

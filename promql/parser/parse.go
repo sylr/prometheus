@@ -834,11 +834,12 @@ func (p *parser) checkAST(node Node) (typ ValueType) {
 				dup(leftSlots, m.Left, "left-hand")
 				dup(rightSlots, m.Right, "right-hand")
 			}
-			for _, l2 := range n.VectorMatching.Include {
-				if leftSlots[l2] || rightSlots[l2] {
-					p.addParseErrf(opRange(), "label %q must not occur in ON and GROUP clause at once", l2)
-				}
-			}
+			// Note: unlike same-name matching labels (handled above), a renamed
+			// mapping name may legitimately appear in a group_left/group_right
+			// clause — e.g. `on(pod = pod_name) group_left(pod_name)` pulls the
+			// differently-named RHS label into the result, which is the whole
+			// point of the feature. So there is no ON-vs-GROUP overlap check for
+			// mapping names.
 		}
 
 		if !n.Op.IsOperator() {

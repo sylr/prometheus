@@ -29,6 +29,12 @@ eval instant at 0m kube_pod * on(pod = pod_name) group_left(region) app
   {pod="a",region="eu"} 10
   {pod="b",region="us"} 40
 
+# group_left may pull the differently-named right-hand match label itself into
+# the result (carries the matched value under the RHS label name).
+eval instant at 0m kube_pod * on(pod = pod_name) group_left(pod_name) app
+  {pod="a",pod_name="a"} 10
+  {pod="b",pod_name="b"} 40
+
 # one-to-one arithmetic keeps only the (left) matching label.
 eval instant at 0m kube_pod + on(pod = pod_name) app
   {pod="a"} 11
