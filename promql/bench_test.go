@@ -150,6 +150,44 @@ func setupJoinQueryTestData(stor *teststorage.TestStorage, _ *promql.Engine, int
 	return nil
 }
 
+// setupRenamedJoinQueryTestData creates two metrics that share a join value
+// stored under a differently-named label on each side: left_metric{id=...} and
+// right_metric{uid=..., region=...}. This lets us compare native
+// `on(id = uid)` matching against the `label_replace` rename workaround.
+func setupRenamedJoinQueryTestData(stor *teststorage.TestStorage, interval, numIntervals, numInstances int) error {
+	ctx := context.Background()
+	rnd := rand.New(rand.NewSource(0)) // Fixed seed for deterministic results.
+
+	var metrics []labels.Labels
+	for range numInstances {
+		id, err := uuid.NewRandomFromReader(rnd)
+		if err != nil {
+			return err
+		}
+		metrics = append(metrics, labels.FromStrings(
+			"__name__", "left_metric", "job", "worker", "id", id.String()))
+		metrics = append(metrics, labels.FromStrings(
+			"__name__", "right_metric", "job", "worker", "uid", id.String(), "region", "eu"))
+	}
+
+	refs := make([]storage.SeriesRef, len(metrics))
+	for s := range numIntervals {
+		a := stor.Appender(ctx)
+		ts := int64(s * interval)
+		for i, metric := range metrics {
+			ref, _ := a.Append(refs[i], metric, ts, float64(s)+float64(i)/float64(len(metrics)))
+			refs[i] = ref
+		}
+		if err := a.Commit(); err != nil {
+			return err
+		}
+	}
+
+	stor.ForceHeadMMap()
+	stor.Compact(ctx)
+	return nil
+}
+
 type benchCase struct {
 	expr  string
 	steps int
@@ -448,6 +486,69 @@ func BenchmarkJoinQuery(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				queryFn()
+			}
+		})
+	}
+}
+
+// BenchmarkRenamedLabelJoin compares native matching on differently-named
+// labels (`on(id = uid)`) against the traditional label_replace workaround that
+// renames one side before a same-name join. Compare the paired cases to see the
+// cost the feature saves.
+func BenchmarkRenamedLabelJoin(b *testing.B) {
+	stor := teststorage.New(b)
+	stor.DisableCompactions() // Don't want auto-compaction disrupting timings.
+	defer stor.Close()
+
+	opts := promql.EngineOpts{
+		Logger:     nil,
+		Reg:        nil,
+		MaxSamples: 50000000,
+		Timeout:    100 * time.Second,
+	}
+	engine := promqltest.NewTestEngineWithOpts(b, opts)
+
+	const interval = 10000 // 10s interval.
+	numIntervals := 8640 + 10000
+
+	require.NoError(b, setupRenamedJoinQueryTestData(stor, interval, numIntervals, 1000))
+
+	for _, c := range []benchCase{
+		// Arithmetic + group_left: native renamed matching vs. label_replace rename.
+		{
+			expr:  `left_metric * on(id = uid) group_left(region) right_metric`,
+			steps: 10000,
+		},
+		{
+			expr:  `left_metric * on(id) group_left(region) label_replace(right_metric, "id", "$1", "uid", "(.*)")`,
+			steps: 10000,
+		},
+		// Set operator: native renamed matching vs. label_replace rename.
+		{
+			expr:  `left_metric and on(id = uid) right_metric`,
+			steps: 10000,
+		},
+		{
+			expr:  `left_metric and on(id) label_replace(right_metric, "id", "$1", "uid", "(.*)")`,
+			steps: 10000,
+		},
+	} {
+		name := fmt.Sprintf("expr=%s/steps=%d", c.expr, c.steps)
+		b.Run(name, func(b *testing.B) {
+			ctx := context.Background()
+			b.ReportAllocs()
+			for b.Loop() {
+				qry, err := engine.NewRangeQuery(
+					ctx, stor, nil, c.expr,
+					timestamp.Time(int64((numIntervals-c.steps)*10_000)),
+					timestamp.Time(int64(numIntervals*10_000)),
+					time.Second*10)
+				require.NoError(b, err)
+
+				res := qry.Exec(ctx)
+				require.NoError(b, res.Err)
+
+				qry.Close()
 			}
 		})
 	}
